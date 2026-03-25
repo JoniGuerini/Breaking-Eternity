@@ -120,11 +120,24 @@
   }
 }
 
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
 html, body, #root {
   background-color: hsl(var(--background)) !important;
   background-image: none !important;
   box-shadow: none !important;
   font-family: 'Geist', 'Geist Fallback' !important;
+}
+
+#root {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
 }
 
 @layer utilities {
@@ -134,6 +147,35 @@ html, body, #root {
   .scrollbar-none {
     -ms-overflow-style: none;
     scrollbar-width: none;
+  }
+
+  /* Scrollbar alinhada ao tema (Firefox) */
+  .scrollbar-game {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.4) hsl(var(--muted) / 0.35);
+  }
+
+  /* Scrollbar alinhada ao tema (Chromium / Safari) */
+  .scrollbar-game::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scrollbar-game::-webkit-scrollbar-track {
+    margin: 4px 0;
+    border-radius: 9999px;
+    background: hsl(var(--muted) / 0.35);
+  }
+
+  .scrollbar-game::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    background-color: hsl(var(--muted-foreground) / 0.45);
+  }
+
+  .scrollbar-game::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--milestone-currency) / 0.65);
   }
 
   /* Baseados em var(--milestone-currency) — sem cor inline nos componentes */

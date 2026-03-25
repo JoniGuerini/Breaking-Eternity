@@ -4,9 +4,15 @@ import {
   formatNumber,
   getGeneratorCost,
   formatTime,
+  formatCycleDuration,
   getMilestoneBarProgress,
   getNextMilestoneGoalForBar,
   countPendingMilestones,
+  getPendingMilestoneCurrency,
+  getEffectiveDuration,
+  getEffectiveProductionPerCycle,
+  getEffectiveProductionPerSecond,
+  PRODUCTION_BAR_VISUAL_SLOW_THRESHOLD_MS,
 } from "@/lib/game-logic"
 import { Button } from "@/components/ui/button"
 import {
@@ -34,9 +40,18 @@ const GeneratorRow: React.FC<{
 }> = ({ gen, resources, buyGenerator, claimGeneratorMilestones, registerBar }) => {
   const cost = getGeneratorCost(gen)
   const canAfford = resources.gte(cost)
-  const totalProduction = gen.baseProduction.times(gen.level)
+  const totalProduction = getEffectiveProductionPerCycle(gen)
+  const effectiveDurMs = getEffectiveDuration(gen)
+  const barShowPerSecond = effectiveDurMs < PRODUCTION_BAR_VISUAL_SLOW_THRESHOLD_MS
+  const productionPerSecond = getEffectiveProductionPerSecond(gen)
   const claimed = gen.claimedMilestoneExponents ?? []
+  const genIndex = parseInt(gen.id.replace("generator", ""), 10) || 1
   const pendingMarcos = countPendingMilestones(gen.level, claimed)
+  const pendingMilestoneCoins = getPendingMilestoneCurrency(
+    gen.level,
+    claimed,
+    genIndex
+  )
   const milestoneFill = getMilestoneBarProgress(gen.level, claimed)
   const nextMarco = getNextMilestoneGoalForBar(gen.level, claimed)
   const timerRef = useRef<any>(null)
@@ -98,10 +113,10 @@ const GeneratorRow: React.FC<{
           <span className="inline-flex shrink-0">
             <button
               type="button"
-              disabled={pendingMarcos === 0}
+              disabled={pendingMilestoneCoins === 0}
               onClick={() => claimGeneratorMilestones(gen.id)}
               className={`relative h-10 w-[5.75rem] shrink-0 overflow-visible rounded-lg border border-muted-foreground/15 bg-[hsl(var(--progress-bg))] text-center transition-[box-shadow,transform] active:scale-[0.98] ${
-                pendingMarcos > 0 ? "cursor-pointer" : "cursor-default"
+                pendingMilestoneCoins > 0 ? "cursor-pointer" : "cursor-default"
               }`}
             >
               <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-lg">
@@ -112,16 +127,16 @@ const GeneratorRow: React.FC<{
                 />
                 <div className="relative flex h-full items-center justify-center px-1.5">
                   <span className="text-[13px] font-semibold font-sans tabular-nums leading-none tracking-normal text-neutral-950 dark:text-white dark:drop-shadow-[0_0_1px_rgba(0,0,0,0.55),0_1px_2px_rgba(0,0,0,0.35)]">
-                    {formatNumber(new Decimal(gen.level))}
+                    {formatNumber(gen.level)}
                   </span>
                 </div>
               </div>
-              {pendingMarcos > 0 ? (
+              {pendingMilestoneCoins > 0 ? (
                 <span
                   className="pointer-events-none absolute -right-1 -top-1 z-10 flex min-h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-md border border-milestone-currency bg-white px-1 text-[10px] font-bold tabular-nums leading-none text-milestone-currency shadow-md dark:bg-white"
                   aria-hidden
                 >
-                  {pendingMarcos}
+                  {pendingMilestoneCoins}
                 </span>
               ) : null}
             </button>
@@ -130,8 +145,18 @@ const GeneratorRow: React.FC<{
         <TooltipContent side="top">
           <p className="text-xs text-muted-foreground">Próximo marco</p>
           <p className="text-sm font-semibold tabular-nums text-foreground">
-            {formatNumber(new Decimal(nextMarco))}
+            {formatNumber(nextMarco)}
           </p>
+          {pendingMilestoneCoins > 0 ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Ao resgatar:{" "}
+              <span className="font-semibold text-milestone-currency tabular-nums">
+                {pendingMilestoneCoins}
+              </span>{" "}
+              moeda(s)
+              {pendingMarcos > 1 ? ` (${pendingMarcos} marcos)` : null}
+            </p>
+          ) : null}
         </TooltipContent>
       </Tooltip>
 
@@ -145,12 +170,18 @@ const GeneratorRow: React.FC<{
         />
         
         {/* Labels inside the bar (Refined 14px Medium) */}
-        <div className="absolute inset-0 flex items-center justify-between px-5 font-sans tabular-nums font-medium text-[14px] pointer-events-none tracking-normal mix-blend-difference text-white">
+        <div
+          className={`absolute inset-0 flex items-center px-5 font-sans text-[14px] font-medium tabular-nums tracking-normal text-white mix-blend-difference pointer-events-none ${
+            barShowPerSecond ? "justify-end" : "justify-between"
+          }`}
+        >
+          {!barShowPerSecond ? (
+            <span className="drop-shadow-sm">{formatCycleDuration(effectiveDurMs)}</span>
+          ) : null}
           <span className="drop-shadow-sm">
-            {formatTime(gen.duration)}
-          </span>
-          <span className="drop-shadow-sm">
-            {formatNumber(totalProduction)}
+            {barShowPerSecond
+              ? `${formatNumber(productionPerSecond)}/s`
+              : formatNumber(totalProduction)}
           </span>
         </div>
       </div>
@@ -202,7 +233,7 @@ export const GeneratorsPage: React.FC = () => {
   const generators = Object.values(state.generators)
 
   return (
-    <div className="flex-1 p-6 space-y-4 overflow-y-auto w-full font-sans relative">
+    <div className="relative min-h-0 flex-1 w-full space-y-4 overflow-y-auto p-6 font-sans scrollbar-game">
       {/* Welcome Back Dialog */}
       <AlertDialog open={!!offlineProgress} onOpenChange={(open) => !open && clearOfflineProgress()}>
         <AlertDialogContent className="flex max-h-[min(92vh,44rem)] max-w-lg flex-col gap-4 overflow-hidden">
@@ -271,9 +302,11 @@ export const GeneratorsPage: React.FC = () => {
                           parseInt(b.replace("generator", ""), 10)
                       )
                       .map((id) => {
-                        const initial = offlineProgress.initialLevels[id] ?? 0
-                        const final = offlineProgress.finalLevels[id] ?? 0
-                        const gained = final - initial
+                        const initial =
+                          offlineProgress.initialLevels[id] ?? new Decimal(0)
+                        const final =
+                          offlineProgress.finalLevels[id] ?? new Decimal(0)
+                        const gained = final.minus(initial)
 
                         return (
                           <tr
@@ -287,20 +320,20 @@ export const GeneratorsPage: React.FC = () => {
                               Gerador {id.replace("generator", "")}
                             </th>
                             <td className="px-2 py-2.5 text-right tabular-nums text-muted-foreground sm:px-3">
-                              {formatNumber(new Decimal(initial))}
+                              {formatNumber(initial)}
                             </td>
                             <td className="px-2 py-2.5 text-right tabular-nums font-medium text-foreground sm:px-3">
-                              {formatNumber(new Decimal(final))}
+                              {formatNumber(final)}
                             </td>
                             <td
                               className={`px-2 py-2.5 text-right tabular-nums font-medium sm:px-3 ${
-                                gained === 0
+                                gained.eq(0)
                                   ? "text-muted-foreground"
                                   : "text-emerald-600 dark:text-emerald-400"
                               }`}
                             >
-                              {gained >= 0 ? "+" : ""}
-                              {formatNumber(new Decimal(gained))}
+                              {gained.gte(0) ? "+" : ""}
+                              {formatNumber(gained)}
                             </td>
                           </tr>
                         )

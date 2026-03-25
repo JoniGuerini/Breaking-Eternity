@@ -7,6 +7,7 @@ import { Footer } from "@/components/layout/Footer"
 import { Tabs, TabsContent } from "@/components/ui/tabs"
 import { GeneratorsPage } from "@/pages/GeneratorsPage"
 import { OptionsPage } from "@/pages/OptionsPage"
+import { UpgradesPage } from "@/pages/UpgradesPage"
 
 function App() {
   const [activeTab, setActiveTab] = useState("generators")
@@ -15,28 +16,27 @@ function App() {
     <ThemeProvider defaultTheme="dark" storageKey="breaking-eternity-theme">
       <TooltipProvider delayDuration={300}>
         <GameProvider>
-          <Tabs
-            value={activeTab}
-            onValueChange={setActiveTab}
-            className="flex min-h-screen flex-col gap-0 bg-background text-foreground"
-          >
-            <Header />
-            <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <TabsContent
-                value="generators"
-                className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden outline-none"
-              >
-                <GeneratorsPage />
-              </TabsContent>
-              <TabsContent
-                value="options"
-                className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden outline-none"
-              >
-                <OptionsPage />
-              </TabsContent>
-            </main>
-            <Footer />
-          </Tabs>
+          <div className="flex min-h-0 w-full flex-1 flex-col">
+            <Tabs
+              value={activeTab}
+              onValueChange={setActiveTab}
+              className="flex min-h-0 w-full flex-1 flex-col gap-0 overflow-hidden bg-background text-foreground"
+            >
+              <Header />
+              <main className="flex min-h-0 flex-1 basis-0 flex-col overflow-hidden">
+                <TabsContent value="generators" className="mt-0">
+                  <GeneratorsPage />
+                </TabsContent>
+                <TabsContent value="upgrades" className="mt-0">
+                  <UpgradesPage />
+                </TabsContent>
+                <TabsContent value="options" className="mt-0">
+                  <OptionsPage />
+                </TabsContent>
+              </main>
+              <Footer />
+            </Tabs>
+          </div>
         </GameProvider>
       </TooltipProvider>
     </ThemeProvider>

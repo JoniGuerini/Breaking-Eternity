@@ -33,7 +33,7 @@ export const OptionsPage: React.FC = () => {
   const { state, toggleFps, resetGame } = useGame()
 
   return (
-    <div className="flex flex-col h-full p-6 overflow-y-auto">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6 scrollbar-game">
       <div className="grid gap-6 max-w-2xl mx-auto w-full pb-8">
         {/* Visual Settings */}
         <Card>
