@@ -1,16 +1,34 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from "react"
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useRef,
+} from "react"
 import {
   type GameState,
   INITIAL_STATE,
-  getGeneratorCost,
   claimEligibleMilestones,
   parseGeneratorLevel,
   getEffectiveDuration,
   getEffectiveProductionPerCycle,
+  getExpectedProductionPerCycleWithCrit,
+  rollProductionWithCrit,
   getNextMilestoneUpgradeCost,
   canBuyDurationUpgrade,
+  canBuyCritChanceUpgrade,
+  getCritChanceUpgradeCost,
+  getCritMultiplierUpgradeCost,
+  getGlobalPurchaseDiscountUpgradeCost,
   getDurationUpgradeCap,
   PRODUCTION_BAR_VISUAL_SLOW_THRESHOLD_MS,
+  CRIT_CHANCE_MAX_RANK,
+  isEssencePassiveUnlocked,
+  parseEssenceFromSave,
+  getEssencePassivePerPulseFromRanks,
+  ESSENCE_PASSIVE_CYCLE_MS,
+  applyBulkGeneratorPurchasesWithCount,
+  type BulkPurchaseMode,
   type Generator,
 } from "@/lib/game-logic"
 import Decimal from "break_eternity.js"
@@ -46,6 +64,14 @@ function mergeGeneratorFromSave(base: Generator, gen: any): Generator {
       : [],
     productionUpgradeRank: prodR,
     durationUpgradeRank: durR,
+    critChanceRank:
+      typeof gen.critChanceRank === "number" && Number.isFinite(gen.critChanceRank)
+        ? Math.max(0, Math.min(CRIT_CHANCE_MAX_RANK, Math.floor(gen.critChanceRank)))
+        : base.critChanceRank ?? 0,
+    critMultiplierRank:
+      typeof gen.critMultiplierRank === "number" && Number.isFinite(gen.critMultiplierRank)
+        ? Math.max(0, Math.floor(gen.critMultiplierRank))
+        : base.critMultiplierRank ?? 0,
   }
 }
 
@@ -55,9 +81,16 @@ interface GameContextType {
   toggleFps: () => void
   resetGame: () => void
   buyGenerator: (id: string) => void
+  bulkPurchaseMode: BulkPurchaseMode
+  setBulkPurchaseMode: (m: BulkPurchaseMode) => void
   claimGeneratorMilestones: (id: string) => void
   claimAllGeneratorMilestones: () => void
-  buyMilestoneUpgrade: (id: string, kind: "production" | "duration") => void
+  buyMilestoneUpgrade: (
+    id: string,
+    kind: "production" | "duration" | "critChance" | "critMultiplier"
+  ) => void
+  buyGlobalPurchaseDiscountUpgrade: () => void
+  buyEssencePassiveUpgrade: (kind: "flat" | "multiplier") => void
   registerBar: (id: string, el: HTMLDivElement | null) => void
   offlineProgress: OfflineProgress | null
   clearOfflineProgress: () => void
@@ -65,6 +98,7 @@ interface GameContextType {
 
 export interface OfflineProgress {
   resourcesGained: Decimal
+  essenceGained: Decimal
   initialLevels: Record<string, Decimal>
   finalLevels: Record<string, Decimal>
   timeOffline: number
@@ -75,13 +109,33 @@ const GameContext = createContext<GameContextType | undefined>(undefined)
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
+  /** Progresso do ciclo de essência passiva (ms até ao próximo pulso); não vai para o React state. */
+  const essencePassiveAccMsRef = useRef(0)
+
+  const [bulkPurchaseMode, setBulkPurchaseMode] =
+    useState<BulkPurchaseMode>("1")
+  const bulkPurchaseModeRef = useRef<BulkPurchaseMode>(bulkPurchaseMode)
+  bulkPurchaseModeRef.current = bulkPurchaseMode
+
   const [state, setState] = useState<GameState>(() => {
     const saved = localStorage.getItem("breaking-eternity-save")
-    if (!saved) return INITIAL_STATE
+    if (!saved) {
+      essencePassiveAccMsRef.current = 0
+      return INITIAL_STATE
+    }
 
     try {
       const parsed = JSON.parse(saved)
       let resources = new Decimal(parsed.resources || 0)
+      let essence = parseEssenceFromSave(parsed.essence)
+      let essencePassiveAccMs =
+        typeof parsed.essencePassiveAccMs === "number" &&
+        Number.isFinite(parsed.essencePassiveAccMs)
+          ? Math.max(
+              0,
+              Math.min(ESSENCE_PASSIVE_CYCLE_MS - 1, Math.floor(parsed.essencePassiveAccMs))
+            )
+          : 0
       const mergedGenerators = { ...INITIAL_STATE.generators }
       
       if (parsed.generators) {
@@ -96,6 +150,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
       const offlineTime = Date.now() - lastSave
       
       // Silent Offline Production (maintain game balance)
+      const passiveEssenceWhileOffline = isEssencePassiveUnlocked(mergedGenerators)
       if (offlineTime > 5000) {
         const genIds = Object.keys(mergedGenerators).sort((a, b) => {
           const numA = parseInt(a.replace("generator", ""), 10) || 0
@@ -111,7 +166,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
             const cycles = Math.floor(totalPotentialTime / dur)
             const newProgress = (totalPotentialTime % dur) / dur
 
-            const production = getEffectiveProductionPerCycle(gen).times(cycles)
+            const production = getExpectedProductionPerCycleWithCrit(gen).times(cycles)
             const genNum = parseInt(id.replace("generator", ""), 10) || 0
             
             if (genNum === 1) {
@@ -128,21 +183,58 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
             gen.progress = newProgress
           }
         })
+
+        if (passiveEssenceWhileOffline) {
+          const flatR =
+            typeof parsed.essencePassiveFlatRank === "number" &&
+            Number.isFinite(parsed.essencePassiveFlatRank)
+              ? Math.max(0, Math.floor(parsed.essencePassiveFlatRank))
+              : 0
+          const multR =
+            typeof parsed.essencePassiveMultiplierRank === "number" &&
+            Number.isFinite(parsed.essencePassiveMultiplierRank)
+              ? Math.max(0, Math.floor(parsed.essencePassiveMultiplierRank))
+              : 0
+          const perPulse = getEssencePassivePerPulseFromRanks(flatR, multR)
+          const totalMs = essencePassiveAccMs + offlineTime
+          const pulses = Math.floor(totalMs / ESSENCE_PASSIVE_CYCLE_MS)
+          essencePassiveAccMs = totalMs % ESSENCE_PASSIVE_CYCLE_MS
+          essence = essence.plus(perPulse.times(pulses))
+        }
       }
+
+      essencePassiveAccMsRef.current = essencePassiveAccMs
 
       return {
         ...INITIAL_STATE,
         ...parsed,
         resources,
+        essence,
         milestoneCurrency:
           typeof parsed.milestoneCurrency === "number" && Number.isFinite(parsed.milestoneCurrency)
             ? Math.max(0, Math.floor(parsed.milestoneCurrency))
             : 0,
+        generatorPurchaseDiscountRank:
+          typeof parsed.generatorPurchaseDiscountRank === "number" &&
+          Number.isFinite(parsed.generatorPurchaseDiscountRank)
+            ? Math.max(0, Math.floor(parsed.generatorPurchaseDiscountRank))
+            : INITIAL_STATE.generatorPurchaseDiscountRank,
+        essencePassiveFlatRank:
+          typeof parsed.essencePassiveFlatRank === "number" &&
+          Number.isFinite(parsed.essencePassiveFlatRank)
+            ? Math.max(0, Math.floor(parsed.essencePassiveFlatRank))
+            : INITIAL_STATE.essencePassiveFlatRank,
+        essencePassiveMultiplierRank:
+          typeof parsed.essencePassiveMultiplierRank === "number" &&
+          Number.isFinite(parsed.essencePassiveMultiplierRank)
+            ? Math.max(0, Math.floor(parsed.essencePassiveMultiplierRank))
+            : INITIAL_STATE.essencePassiveMultiplierRank,
         generators: mergedGenerators,
         lastSaveTime: Date.now(),
       }
     } catch (e) {
       console.error("Initialization error:", e)
+      essencePassiveAccMsRef.current = 0
       return INITIAL_STATE
     }
   })
@@ -178,6 +270,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
         return numB - numA
       })
 
+      const passiveEssenceWhileOffline = isEssencePassiveUnlocked(tempGenerators)
+
       genIds.forEach(id => {
         const gen = tempGenerators[id]
         if (gen.level.gt(0)) {
@@ -185,7 +279,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
           const totalPotentialTime = offlineTime + (gen.progress * dur)
           const cycles = Math.floor(totalPotentialTime / dur)
 
-          const production = getEffectiveProductionPerCycle(gen).times(cycles)
+          const production = getExpectedProductionPerCycleWithCrit(gen).times(cycles)
           const genNum = parseInt(id.replace("generator", ""), 10) || 0
           
           if (genNum === 1) {
@@ -207,13 +301,44 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
         finalLevels[id] = new Decimal(tempGenerators[id].level)
       })
 
+      let essenceGained = new Decimal(0)
+      if (offlineTime > 5000 && passiveEssenceWhileOffline) {
+        const essenceStart = parseEssenceFromSave(parsed.essence)
+        let essence = new Decimal(essenceStart)
+        let essencePassiveAccMs =
+          typeof parsed.essencePassiveAccMs === "number" &&
+          Number.isFinite(parsed.essencePassiveAccMs)
+            ? Math.max(
+                0,
+                Math.min(ESSENCE_PASSIVE_CYCLE_MS - 1, Math.floor(parsed.essencePassiveAccMs))
+              )
+            : 0
+        const flatR =
+          typeof parsed.essencePassiveFlatRank === "number" &&
+          Number.isFinite(parsed.essencePassiveFlatRank)
+            ? Math.max(0, Math.floor(parsed.essencePassiveFlatRank))
+            : 0
+        const multR =
+          typeof parsed.essencePassiveMultiplierRank === "number" &&
+          Number.isFinite(parsed.essencePassiveMultiplierRank)
+            ? Math.max(0, Math.floor(parsed.essencePassiveMultiplierRank))
+            : 0
+        const perPulse = getEssencePassivePerPulseFromRanks(flatR, multR)
+        const totalMs = essencePassiveAccMs + offlineTime
+        const pulses = Math.floor(totalMs / ESSENCE_PASSIVE_CYCLE_MS)
+        essencePassiveAccMs = totalMs % ESSENCE_PASSIVE_CYCLE_MS
+        essence = essence.plus(perPulse.times(pulses))
+        essenceGained = essence.minus(essenceStart)
+      }
+
       const hasLevelChanges = Object.keys(initialLevels).some(
         (id) => !initialLevels[id].eq(finalLevels[id])
       )
-      if (resourcesGained.eq(0) && !hasLevelChanges) return null
+      if (resourcesGained.eq(0) && !hasLevelChanges && essenceGained.eq(0)) return null
 
       return {
         resourcesGained,
+        essenceGained,
         initialLevels,
         finalLevels,
         timeOffline: offlineTime
@@ -254,6 +379,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
     const handleSave = () => {
       const stateToSave = {
         ...stateRef.current,
+        essencePassiveAccMs: Math.min(
+          ESSENCE_PASSIVE_CYCLE_MS - 1,
+          Math.max(0, Math.floor(essencePassiveAccMsRef.current))
+        ),
         lastSaveTime: Date.now(),
         generators: Object.fromEntries(
           Object.entries(stateRef.current.generators).map(([id, gen]) => [
@@ -284,12 +413,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const MAX_DELTA_MS = 1000 * 60 * 60 * 24 * 7
 
-    const commitProduction = (
+    const commitTickProgress = (
       cycleCompleted: boolean,
       resourcesAdded: Decimal,
-      levelsAdded: Record<string, Decimal>
+      levelsAdded: Record<string, Decimal>,
+      essenceGained: Decimal
     ) => {
-      if (!cycleCompleted) return
+      if (!cycleCompleted && !essenceGained.gt(0)) return
       setState((prev) => {
         const nextGenerators = { ...prev.generators }
         Object.entries(levelsAdded).forEach(([targetId, amount]) => {
@@ -303,6 +433,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
         return {
           ...prev,
           resources: prev.resources.plus(resourcesAdded),
+          essence: essenceGained.gt(0)
+            ? prev.essence.plus(essenceGained)
+            : prev.essence,
           generators: nextGenerators,
         }
       })
@@ -316,8 +449,22 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
       let cycleCompleted = false
       let resourcesAdded = new Decimal(0)
       const levelsAdded: Record<string, Decimal> = {}
+      const gens = stateRef.current.generators
+      let essenceGained = new Decimal(0)
+      if (isEssencePassiveUnlocked(gens)) {
+        essencePassiveAccMsRef.current += dt
+        const st = stateRef.current
+        const perPulse = getEssencePassivePerPulseFromRanks(
+          st.essencePassiveFlatRank ?? 0,
+          st.essencePassiveMultiplierRank ?? 0
+        )
+        while (essencePassiveAccMsRef.current >= ESSENCE_PASSIVE_CYCLE_MS) {
+          essencePassiveAccMsRef.current -= ESSENCE_PASSIVE_CYCLE_MS
+          essenceGained = essenceGained.plus(perPulse)
+        }
+      }
 
-      const generators = stateRef.current.generators
+      const generators = gens
       for (const id in generators) {
         const gen = generators[id]
         if (gen.level.gt(0)) {
@@ -329,7 +476,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
 
           if (cycles > 0) {
             cycleCompleted = true
-            const totalProd = getEffectiveProductionPerCycle(gen).times(cycles)
+            const basePerCycle = getEffectiveProductionPerCycle(gen)
+            const totalProd = rollProductionWithCrit(basePerCycle, cycles, gen)
             const genNum = parseInt(id.replace("generator", ""), 10) || 0
             if (genNum === 1) {
               resourcesAdded = resourcesAdded.plus(totalProd)
@@ -347,7 +495,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
         }
       }
 
-      commitProduction(cycleCompleted, resourcesAdded, levelsAdded)
+      commitTickProgress(cycleCompleted, resourcesAdded, levelsAdded, essenceGained)
     }
 
     const gameLoop = (currentTime: number) => {
@@ -431,27 +579,19 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
         bar.style.transform = "scaleX(0)"
       }
     })
+    essencePassiveAccMsRef.current = 0
     setState(INITIAL_STATE)
   }
 
   const buyGenerator = (id: string) => {
     setState((prev) => {
-      const gen = prev.generators[id]
-      if (!gen) return prev
-      const cost = getGeneratorCost(gen)
-      if (prev.resources.cmp(cost) < 0) return prev
-      return {
-        ...prev,
-        resources: prev.resources.minus(cost),
-        generators: {
-          ...prev.generators,
-          [id]: {
-            ...gen,
-            level: gen.level.plus(1),
-            claimedMilestoneExponents: gen.claimedMilestoneExponents ?? [],
-          },
-        },
-      }
+      const { state: next, count } = applyBulkGeneratorPurchasesWithCount(
+        prev,
+        id,
+        bulkPurchaseModeRef.current
+      )
+      if (count === 0) return prev
+      return next
     })
   }
 
@@ -507,35 +647,87 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
     })
   }
 
-  const buyMilestoneUpgrade = (id: string, kind: "production" | "duration") => {
+  const buyGlobalPurchaseDiscountUpgrade = () => {
+    setState((prev) => {
+      const rank = prev.generatorPurchaseDiscountRank ?? 0
+      const cost = getGlobalPurchaseDiscountUpgradeCost(rank)
+      if (prev.milestoneCurrency < cost) return prev
+      return {
+        ...prev,
+        milestoneCurrency: prev.milestoneCurrency - cost,
+        generatorPurchaseDiscountRank: rank + 1,
+      }
+    })
+  }
+
+  const buyEssencePassiveUpgrade = (kind: "flat" | "multiplier") => {
+    setState((prev) => {
+      if (!isEssencePassiveUnlocked(prev.generators)) return prev
+      if (kind === "flat") {
+        const rank = prev.essencePassiveFlatRank ?? 0
+        const cost = getNextMilestoneUpgradeCost(rank)
+        if (prev.milestoneCurrency < cost) return prev
+        return {
+          ...prev,
+          milestoneCurrency: prev.milestoneCurrency - cost,
+          essencePassiveFlatRank: rank + 1,
+        }
+      }
+      const rank = prev.essencePassiveMultiplierRank ?? 0
+      const cost = getNextMilestoneUpgradeCost(rank)
+      if (prev.milestoneCurrency < cost) return prev
+      return {
+        ...prev,
+        milestoneCurrency: prev.milestoneCurrency - cost,
+        essencePassiveMultiplierRank: rank + 1,
+      }
+    })
+  }
+
+  const buyMilestoneUpgrade = (
+    id: string,
+    kind: "production" | "duration" | "critChance" | "critMultiplier"
+  ) => {
     setState((prev) => {
       const gen = prev.generators[id]
       if (!gen) return prev
-      const rank =
-        kind === "production"
-          ? gen.productionUpgradeRank ?? 0
-          : gen.durationUpgradeRank ?? 0
-      const cost = getNextMilestoneUpgradeCost(rank)
-      if (prev.milestoneCurrency < cost) return prev
-      if (kind === "duration" && !canBuyDurationUpgrade(gen)) return prev
 
-      if (kind === "duration") {
+      let cost: number
+      let nextGen: Generator
+
+      if (kind === "production") {
+        const rank = gen.productionUpgradeRank ?? 0
+        cost = getNextMilestoneUpgradeCost(rank)
+        nextGen = { ...gen, productionUpgradeRank: rank + 1 }
+      } else if (kind === "duration") {
+        const rank = gen.durationUpgradeRank ?? 0
+        if (!canBuyDurationUpgrade(gen)) return prev
+        cost = getNextMilestoneUpgradeCost(rank)
         const oldD = getEffectiveDuration(gen)
-        const nextGen = { ...gen, durationUpgradeRank: rank + 1 }
-        const newD = getEffectiveDuration(nextGen)
+        const ng = { ...gen, durationUpgradeRank: rank + 1 }
+        const newD = getEffectiveDuration(ng)
         const p = progressRef.current[id] ?? 0
         progressRef.current[id] = newD > 0 ? Math.min(1, (p * oldD) / newD) : p
+        nextGen = ng
+      } else if (kind === "critChance") {
+        const rank = gen.critChanceRank ?? 0
+        if (!canBuyCritChanceUpgrade(gen)) return prev
+        cost = getCritChanceUpgradeCost(rank)
+        nextGen = { ...gen, critChanceRank: rank + 1 }
+      } else {
+        const rank = gen.critMultiplierRank ?? 0
+        cost = getCritMultiplierUpgradeCost(rank)
+        nextGen = { ...gen, critMultiplierRank: rank + 1 }
       }
+
+      if (prev.milestoneCurrency < cost) return prev
 
       return {
         ...prev,
         milestoneCurrency: prev.milestoneCurrency - cost,
         generators: {
           ...prev.generators,
-          [id]:
-            kind === "production"
-              ? { ...gen, productionUpgradeRank: rank + 1 }
-              : { ...gen, durationUpgradeRank: rank + 1 },
+          [id]: nextGen,
         },
       }
     })
@@ -547,9 +739,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
     toggleFps,
     resetGame,
     buyGenerator,
+    bulkPurchaseMode,
+    setBulkPurchaseMode,
     claimGeneratorMilestones,
     claimAllGeneratorMilestones,
     buyMilestoneUpgrade,
+    buyGlobalPurchaseDiscountUpgrade,
+    buyEssencePassiveUpgrade,
     registerBar,
     offlineProgress,
     clearOfflineProgress: () => setOfflineProgress(null),

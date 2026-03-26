@@ -66,8 +66,11 @@
     --input: 0 0% 89.8%;
     --ring: 0 0% 3.9%;
     --radius: 0.5rem;
-    /* Cor única (HSL shadcn): moedas no header, barra de marcos, badge. Ver utilitários abaixo. */
-    --milestone-currency: 221.2 83.2% 53.3%;
+    /* Moedas / barra de marcos / badge — roxo. */
+    --milestone-currency: 277 70% 52%;
+    /* Cartão de índice: fundo azul; borda neutra (igual antes). */
+    --generator-index-bg: 221.2 58% 91%;
+    --generator-index-fg: 221.2 55% 26%;
   }
 
   .dark {
@@ -92,7 +95,33 @@
     --ring: 0 0% 83.1%;
     --progress-fill: 0 0% 100%;
     --progress-bg: 0 0% 14.9%;
-    --milestone-currency: 221.2 83.2% 53.3%;
+    --milestone-currency: 277 66% 60%;
+    /* Azul bem carregado — se ficar muito escuro no preto parece “vidro”. */
+    --generator-index-bg: 221.2 78% 46%;
+    --generator-index-fg: 0 0% 100%;
+  }
+}
+
+@layer components {
+  /**
+   * Garante opacidade total: o * global usa borda com alpha e alguns builds
+   * deixam o fundo “sumindo”. Aqui manda hsl() sem alpha + blend normal.
+   */
+  .generator-index-card {
+    isolation: isolate;
+    mix-blend-mode: normal;
+    opacity: 1;
+    border-style: solid;
+    border-width: 1px;
+    background-color: hsl(var(--generator-index-bg));
+    /* Borda cinza discreta, como `border-muted-foreground/15` nos outros blocos. */
+    border-color: hsl(var(--muted-foreground) / 0.18);
+    color: hsl(var(--generator-index-fg));
+    background-clip: padding-box;
+  }
+
+  .dark .generator-index-card {
+    border-color: hsl(var(--muted-foreground) / 0.24);
   }
 }
 
@@ -178,7 +207,7 @@ html, body, #root {
     background-color: hsl(var(--milestone-currency) / 0.65);
   }
 
-  /* Baseados em var(--milestone-currency) — sem cor inline nos componentes */
+  /* Roxo das moedas/marcos — sem cor inline nos componentes */
   .text-milestone-currency {
     color: hsl(var(--milestone-currency));
   }

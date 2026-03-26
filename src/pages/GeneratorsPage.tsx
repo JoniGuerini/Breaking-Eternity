@@ -1,8 +1,19 @@
-import React, { useRef, useCallback, useEffect } from "react"
+import React, {
+  useRef,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react"
 import { useGame } from "@/components/game-provider"
 import {
   formatNumber,
+  countGeneratorPurchasesForMode,
+  applyBulkGeneratorPurchasesWithCount,
+  BULK_PREVIEW_MAX_ITERATIONS,
   getGeneratorCost,
+  getPreviousGeneratorQuantityCost,
+  GENERATOR_ESSENCE_COST,
   formatTime,
   formatCycleDuration,
   getMilestoneBarProgress,
@@ -10,9 +21,14 @@ import {
   countPendingMilestones,
   getPendingMilestoneCurrency,
   getEffectiveDuration,
-  getEffectiveProductionPerCycle,
+  getExpectedProductionPerCycleWithCrit,
   getEffectiveProductionPerSecond,
+  getTotalPendingMilestoneCurrency,
+  formatEssenceAmount,
   PRODUCTION_BAR_VISUAL_SLOW_THRESHOLD_MS,
+  type BulkPurchaseMode,
+  type GameState,
+  type Generator,
 } from "@/lib/game-logic"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,27 +46,149 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import Decimal from "break_eternity.js"
+import { GeneratorIndexCard } from "@/components/generator-index-card"
+import {
+  ResourceGlyph,
+  RESOURCE_GLYPH_COLUMN_CLASS,
+} from "@/components/resource-glyph"
+
+function generatorSortIndex(gen: Generator): number {
+  return parseInt(gen.id.replace("generator", ""), 10) || 0
+}
+
+type BulkPreviewEntry = { count: number; capped: boolean }
+
+/**
+ * Modo 1×: barato por tick. % / Marco: simulação limitada (`BULK_PREVIEW_MAX_ITERATIONS`) e
+ * repartida por `requestAnimationFrame` (um gerador por frame) para não travar o jogo avançado.
+ */
+const HEAVY_PREVIEW_REFRESH_MS = 320
+
+function useBulkPurchasePreviewCounts(
+  gameState: GameState,
+  mode: BulkPurchaseMode
+): Record<string, BulkPreviewEntry> {
+  const stateRef = useRef(gameState)
+  stateRef.current = gameState
+
+  const oneXPreview = useMemo(() => {
+    const out: Record<string, BulkPreviewEntry> = {}
+    for (const id of Object.keys(gameState.generators)) {
+      out[id] = {
+        count: countGeneratorPurchasesForMode(gameState, id, "1"),
+        capped: false,
+      }
+    }
+    return out
+  }, [gameState])
+
+  const [heavyPreview, setHeavyPreview] = useState<Record<string, BulkPreviewEntry>>({})
+  const waveGenRef = useRef(0)
+  const rafRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (mode === "1") return
+
+    let cancelled = false
+
+    const clearRaf = () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+    }
+
+    const runWave = () => {
+      if (cancelled) return
+      clearRaf()
+      const myWave = ++waveGenRef.current
+      const snapshot = stateRef.current
+      const ids = Object.keys(snapshot.generators).sort(
+        (a, b) =>
+          generatorSortIndex(snapshot.generators[a]!) -
+          generatorSortIndex(snapshot.generators[b]!)
+      )
+      const acc: Record<string, BulkPreviewEntry> = {}
+      let i = 0
+
+      const step = () => {
+        if (cancelled || myWave !== waveGenRef.current) return
+        if (i >= ids.length) {
+          rafRef.current = null
+          setHeavyPreview(acc)
+          return
+        }
+        const gid = ids[i]!
+        i += 1
+        const r = applyBulkGeneratorPurchasesWithCount(snapshot, gid, mode, {
+          maxIterations: BULK_PREVIEW_MAX_ITERATIONS,
+        })
+        acc[gid] = { count: r.count, capped: r.capped }
+        rafRef.current = requestAnimationFrame(step)
+      }
+
+      rafRef.current = requestAnimationFrame(step)
+    }
+
+    runWave()
+    const intervalId = window.setInterval(runWave, HEAVY_PREVIEW_REFRESH_MS)
+
+    return () => {
+      cancelled = true
+      clearRaf()
+      window.clearInterval(intervalId)
+    }
+  }, [mode])
+
+  return mode === "1" ? oneXPreview : heavyPreview
+}
 
 const GeneratorRow: React.FC<{
-  gen: any
-  resources: Decimal
+  gen: Generator
+  purchaseDiscountRank: number
+  bulkPurchaseMode: BulkPurchaseMode
+  previewEntry: BulkPreviewEntry
   buyGenerator: (id: string) => void
   claimGeneratorMilestones: (id: string) => void
   registerBar: (id: string, el: HTMLDivElement | null) => void
-}> = ({ gen, resources, buyGenerator, claimGeneratorMilestones, registerBar }) => {
-  const cost = getGeneratorCost(gen)
-  const canAfford = resources.gte(cost)
-  const totalProduction = getEffectiveProductionPerCycle(gen)
+}> = ({
+  gen,
+  purchaseDiscountRank,
+  bulkPurchaseMode,
+  previewEntry,
+  buyGenerator,
+  claimGeneratorMilestones,
+  registerBar,
+}) => {
+  const genIndex = parseInt(gen.id.replace("generator", ""), 10) || 1
+  const cost = getGeneratorCost(gen, purchaseDiscountRank)
+  const prevQuantityCost = getPreviousGeneratorQuantityCost(
+    genIndex,
+    purchaseDiscountRank
+  )
+
+  const canAfford = previewEntry.count > 0
+
+  const buyButtonLabel = useMemo(() => {
+    const { count, capped } = previewEntry
+    if (count <= 0) return "Comprar"
+    if (bulkPurchaseMode === "1" && count === 1) return "Comprar"
+    const n = formatNumber(new Decimal(count))
+    return capped ? `Comprar ×${n}+` : `Comprar ×${n}`
+  }, [previewEntry, bulkPurchaseMode])
+  const totalProduction = getExpectedProductionPerCycleWithCrit(gen)
   const effectiveDurMs = getEffectiveDuration(gen)
   const barShowPerSecond = effectiveDurMs < PRODUCTION_BAR_VISUAL_SLOW_THRESHOLD_MS
   const productionPerSecond = getEffectiveProductionPerSecond(gen)
   const claimed = gen.claimedMilestoneExponents ?? []
-  const genIndex = parseInt(gen.id.replace("generator", ""), 10) || 1
   const pendingMarcos = countPendingMilestones(gen.level, claimed)
   const pendingMilestoneCoins = getPendingMilestoneCurrency(
     gen.level,
     claimed,
     genIndex
+  )
+  const pendingMilestoneCoinsLabel = formatNumber(
+    new Decimal(pendingMilestoneCoins)
   )
   const milestoneFill = getMilestoneBarProgress(gen.level, claimed)
   const nextMarco = getNextMilestoneGoalForBar(gen.level, claimed)
@@ -101,11 +239,7 @@ const GeneratorRow: React.FC<{
   return (
     <div className="flex items-center gap-2 w-full">
       {/* 1. Name Card (Simplified Index) */}
-      <div className="h-10 min-w-[48px] px-2 bg-[hsl(var(--progress-bg))] border border-muted-foreground/15 rounded-lg flex items-center justify-center">
-        <h2 className="text-[14px] font-medium tracking-wide">
-          {gen.id.replace("generator", "")}
-        </h2>
-      </div>
+      <GeneratorIndexCard index={genIndex} size="row" />
 
       {/* 2. Quantidade + barra de marco (clique resgata moedas pendentes) */}
       <Tooltip>
@@ -133,10 +267,11 @@ const GeneratorRow: React.FC<{
               </div>
               {pendingMilestoneCoins > 0 ? (
                 <span
-                  className="pointer-events-none absolute -right-1 -top-1 z-10 flex min-h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-md border border-milestone-currency bg-white px-1 text-[10px] font-bold tabular-nums leading-none text-milestone-currency shadow-md dark:bg-white"
+                  className="pointer-events-none absolute -right-1 -top-1 z-10 flex min-h-[1.125rem] max-w-[min(5.5rem,calc(100vw-6rem))] min-w-[1.125rem] items-center justify-center rounded-md border border-milestone-currency bg-white px-1 text-[10px] font-bold tabular-nums leading-none text-milestone-currency shadow-md dark:bg-white"
                   aria-hidden
+                  title={pendingMilestoneCoinsLabel}
                 >
-                  {pendingMilestoneCoins}
+                  <span className="truncate">{pendingMilestoneCoinsLabel}</span>
                 </span>
               ) : null}
             </button>
@@ -148,13 +283,13 @@ const GeneratorRow: React.FC<{
             {formatNumber(nextMarco)}
           </p>
           {pendingMilestoneCoins > 0 ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Ao resgatar:{" "}
-              <span className="font-semibold text-milestone-currency tabular-nums">
-                {pendingMilestoneCoins}
-              </span>{" "}
-              moeda(s)
-              {pendingMarcos > 1 ? ` (${pendingMarcos} marcos)` : null}
+            <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <span>Ao resgatar:</span>
+              <span className="inline-flex items-center gap-1.5 font-semibold text-milestone-currency tabular-nums">
+                <ResourceGlyph kind="milestone" />
+                {pendingMilestoneCoinsLabel}
+              </span>
+              {pendingMarcos > 1 ? `(${pendingMarcos} marcos)` : null}
             </p>
           ) : null}
         </TooltipContent>
@@ -169,19 +304,30 @@ const GeneratorRow: React.FC<{
           style={{ transform: 'scaleX(0)' }}
         />
         
-        {/* Labels inside the bar (Refined 14px Medium) */}
+        {/* Texto com mix-blend-difference; ícones / mini-cartão fora dessa camada → cor sólida opaca. */}
         <div
-          className={`absolute inset-0 flex items-center px-5 font-sans text-[14px] font-medium tabular-nums tracking-normal text-white mix-blend-difference pointer-events-none ${
+          className={`pointer-events-none absolute inset-0 flex items-center px-5 font-sans text-[14px] font-medium tabular-nums tracking-normal ${
             barShowPerSecond ? "justify-end" : "justify-between"
           }`}
         >
           {!barShowPerSecond ? (
-            <span className="drop-shadow-sm">{formatCycleDuration(effectiveDurMs)}</span>
+            <span className="text-white mix-blend-difference drop-shadow-sm">
+              {formatCycleDuration(effectiveDurMs)}
+            </span>
           ) : null}
-          <span className="drop-shadow-sm">
-            {barShowPerSecond
-              ? `${formatNumber(productionPerSecond)}/s`
-              : formatNumber(totalProduction)}
+          <span className="inline-flex items-center gap-1.5">
+            <span className="text-white mix-blend-difference drop-shadow-sm">
+              {barShowPerSecond
+                ? `${formatNumber(productionPerSecond)}/s`
+                : formatNumber(totalProduction)}
+            </span>
+            <span className="relative z-10 shrink-0" aria-hidden>
+              {genIndex === 1 ? (
+                <ResourceGlyph kind="base" className="scale-110" />
+              ) : (
+                <GeneratorIndexCard index={genIndex} size="mini" />
+              )}
+            </span>
           </span>
         </div>
       </div>
@@ -192,9 +338,9 @@ const GeneratorRow: React.FC<{
           onMouseDown={startBuying}
           onMouseUp={stopBuying}
           onMouseLeave={stopBuying}
-          className="h-10 min-w-[160px] rounded-lg border border-muted-foreground/15 px-6 text-[14px] font-medium tracking-wide shadow-none transition-transform active:scale-[0.98] bg-primary text-primary-foreground hover:bg-primary/90"
+          className="h-10 min-w-[10.5rem] max-w-[min(100%,14rem)] truncate rounded-lg border border-muted-foreground/15 px-4 text-[14px] font-medium tracking-wide shadow-none transition-transform active:scale-[0.98] bg-primary text-primary-foreground hover:bg-primary/90 sm:min-w-[11.5rem] sm:px-5"
         >
-          Comprar
+          {buyButtonLabel}
         </Button>
       ) : (
         <Tooltip>
@@ -202,16 +348,39 @@ const GeneratorRow: React.FC<{
             <span className="inline-flex cursor-default">
               <Button
                 disabled
-                className="h-10 min-w-[160px] rounded-lg border border-muted-foreground/15 px-6 text-[14px] font-medium tracking-wide shadow-none bg-secondary/50 text-muted-foreground"
+                className="h-10 min-w-[10.5rem] max-w-[min(100%,14rem)] truncate rounded-lg border border-muted-foreground/15 px-4 text-[14px] font-medium tracking-wide shadow-none bg-secondary/50 text-muted-foreground sm:min-w-[11.5rem] sm:px-5"
               >
-                Comprar
+                {buyButtonLabel}
               </Button>
             </span>
           </TooltipTrigger>
           <TooltipContent side="top">
-            <span className="text-sm font-semibold tabular-nums text-destructive">
-              {formatNumber(cost)}
-            </span>
+            <div className="flex flex-col gap-1 text-xs font-semibold tabular-nums">
+              <div className="flex items-center gap-2">
+                <span className={RESOURCE_GLYPH_COLUMN_CLASS}>
+                  <ResourceGlyph kind="base" />
+                </span>
+                <span className="text-primary">{formatNumber(cost)}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={RESOURCE_GLYPH_COLUMN_CLASS}>
+                  <ResourceGlyph kind="essence" />
+                </span>
+                <span className="text-emerald-700 dark:text-emerald-400">
+                  {formatNumber(GENERATOR_ESSENCE_COST)}
+                </span>
+              </div>
+              {genIndex > 1 && prevQuantityCost.gt(0) ? (
+                <div className="flex items-center gap-2">
+                  <span className={RESOURCE_GLYPH_COLUMN_CLASS}>
+                    <GeneratorIndexCard index={genIndex - 1} size="mini" />
+                  </span>
+                  <span className="text-neutral-950 dark:text-white">
+                    {formatNumber(prevQuantityCost)}
+                  </span>
+                </div>
+              ) : null}
+            </div>
           </TooltipContent>
         </Tooltip>
       )}
@@ -224,13 +393,27 @@ export const GeneratorsPage: React.FC = () => {
     state,
     buyGenerator,
     claimGeneratorMilestones,
+    claimAllGeneratorMilestones,
     registerBar,
     offlineProgress,
     clearOfflineProgress,
+    bulkPurchaseMode,
   } = useGame()
 
-  // Dynamic rendering of all generators
+  const bulkPreviewCounts = useBulkPurchasePreviewCounts(state, bulkPurchaseMode)
+
   const generators = Object.values(state.generators)
+  const sortedGenerators = useMemo(
+    () => [...generators].sort((a, b) => generatorSortIndex(a) - generatorSortIndex(b)),
+    [generators]
+  )
+  const generatorsThrough10 = sortedGenerators.filter((g) => generatorSortIndex(g) <= 10)
+  const generatorsAfter10 = sortedGenerators.filter((g) => generatorSortIndex(g) > 10)
+
+  const pendingMilestoneCoinsAll = useMemo(
+    () => getTotalPendingMilestoneCurrency(state.generators),
+    [state.generators]
+  )
 
   return (
     <div className="relative min-h-0 flex-1 w-full space-y-4 overflow-y-auto p-6 font-sans scrollbar-game">
@@ -253,11 +436,21 @@ export const GeneratorsPage: React.FC = () => {
           {offlineProgress && (
             <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border bg-muted/30 scrollbar-none">
               <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-3">
-                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <ResourceGlyph kind="base" />
                   Recurso base
                 </span>
                 <span className="text-sm font-semibold tabular-nums text-foreground">
                   +{formatNumber(offlineProgress.resourcesGained)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-3">
+                <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <ResourceGlyph kind="essence" />
+                  Essência
+                </span>
+                <span className="text-sm font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+                  +{formatEssenceAmount(offlineProgress.essenceGained)}
                 </span>
               </div>
 
@@ -355,11 +548,74 @@ export const GeneratorsPage: React.FC = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {generators.map((gen) => (
+      {generatorsThrough10.map((gen) => (
         <GeneratorRow
           key={gen.id}
           gen={gen}
-          resources={state.resources}
+          purchaseDiscountRank={state.generatorPurchaseDiscountRank ?? 0}
+          bulkPurchaseMode={bulkPurchaseMode}
+          previewEntry={
+            bulkPreviewCounts[gen.id] ?? { count: 0, capped: false }
+          }
+          buyGenerator={buyGenerator}
+          claimGeneratorMilestones={claimGeneratorMilestones}
+          registerBar={registerBar}
+        />
+      ))}
+
+      {/* Mesma grelha: botão só na coluna da barra de ciclo (flex-1); à direita, espaço = coluna do Comprar */}
+      <div className="flex w-full items-center gap-2">
+        <div
+          className="h-10 min-w-[48px] shrink-0 rounded-lg border border-transparent px-2"
+          aria-hidden
+        />
+        <div className="h-10 w-[5.75rem] shrink-0" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="block w-full">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pendingMilestoneCoinsAll === 0}
+                  onClick={claimAllGeneratorMilestones}
+                  className="h-10 w-full gap-2 truncate rounded-lg border-milestone-currency/35 bg-background/80 px-4 text-sm font-medium text-milestone-currency shadow-none hover:bg-milestone-currency/10 hover:text-milestone-currency sm:px-5"
+                >
+                  <ResourceGlyph kind="milestone" className="scale-125" />
+                  Resgatar marcos
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[min(18rem,calc(100vw-2rem))]">
+              <div className="space-y-1 text-xs">
+                <p>Resgatar todas as moedas pendentes de todos os geradores de uma vez.</p>
+                {pendingMilestoneCoinsAll > 0 ? (
+                  <p className="flex items-center gap-1.5">
+                    <ResourceGlyph kind="milestone" />
+                    <span className="font-semibold tabular-nums text-milestone-currency">
+                      +{formatNumber(new Decimal(pendingMilestoneCoinsAll))}
+                    </span>
+                  </p>
+                ) : null}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        <div
+          className="h-10 shrink-0 basis-[11.5rem] min-w-[10.5rem] max-w-[14rem] sm:min-w-[11.5rem]"
+          aria-hidden
+        />
+      </div>
+
+      {generatorsAfter10.map((gen) => (
+        <GeneratorRow
+          key={gen.id}
+          gen={gen}
+          purchaseDiscountRank={state.generatorPurchaseDiscountRank ?? 0}
+          bulkPurchaseMode={bulkPurchaseMode}
+          previewEntry={
+            bulkPreviewCounts[gen.id] ?? { count: 0, capped: false }
+          }
           buyGenerator={buyGenerator}
           claimGeneratorMilestones={claimGeneratorMilestones}
           registerBar={registerBar}

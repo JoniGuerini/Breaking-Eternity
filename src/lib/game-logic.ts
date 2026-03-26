@@ -5,6 +5,7 @@ export interface Generator {
   name: string
   /** Quantidade possuída; Decimal para suportar valores >> Number.MAX_SAFE_INTEGER. */
   level: Decimal
+  /** Preço fixo em recurso base por cada compra (não escala com o nível). */
   baseCost: Decimal
   baseProduction: Decimal
   duration: number // in ms
@@ -15,22 +16,72 @@ export interface Generator {
   productionUpgradeRank: number
   /** Metade do tempo de ciclo por nível; máximo quando o ciclo atinge 0,1s. */
   durationUpgradeRank: number
+  /** Chance de crítico por ciclo: +2,5% por ranque (0 = sem crítico). */
+  critChanceRank: number
+  /** Multiplicador do crítico: 2×, 4×, 8×… = 2^(ranque+1). */
+  critMultiplierRank: number
 }
 
 export interface GameState {
   resources: Decimal
+  /**
+   * Recurso secundário: cada compra de gerador consome `GENERATOR_ESSENCE_COST`.
+   * Gera passivamente em ciclos de `ESSENCE_PASSIVE_CYCLE_MS` ms após existir pelo menos um gerador com nível ≥ 1.
+   * Quantidade por ciclo: ver `getEssencePassivePerPulse`.
+   */
+  essence: Decimal
   showFps: boolean
   lastSaveTime: number
   generators: Record<string, Generator>
   /** Moeda de marcos (futuras melhorias). */
   milestoneCurrency: number
+  /**
+   * Desconto global no custo de compra de todos os geradores: cada ranque divide por 2 (metade).
+   * Custo efectivo = baseCost do gerador ÷ 2^ranque (o preço base não sobe com a quantidade).
+   */
+  generatorPurchaseDiscountRank: number
+  /** +1 unidade de essência por ciclo passivo por nível (soma à base antes do multiplicador). */
+  essencePassiveFlatRank: number
+  /** Cada nível dobra a essência passiva por ciclo (aplica-se a base + bónus fixo). */
+  essencePassiveMultiplierRank: number
+}
+
+/** Essência gasta por compra de qualquer gerador. */
+export const GENERATOR_ESSENCE_COST = new Decimal(1)
+
+/** Taxa base de geração passiva de essência (unidades por ciclo completo). */
+export const ESSENCE_PASSIVE_PER_SECOND = new Decimal(1)
+
+/** Duração do “ciclo” de essência passiva (ms): ao completar, credita a taxa efectiva de uma vez. */
+export const ESSENCE_PASSIVE_CYCLE_MS = 1000
+
+/** Essência por ciclo completo: (base + flat) × 2^mult. */
+export function getEssencePassivePerPulseFromRanks(
+  flatRank: number,
+  multiplierRank: number
+): Decimal {
+  const f = Math.max(0, Math.floor(flatRank) || 0)
+  const m = Math.max(0, Math.floor(multiplierRank) || 0)
+  const base = ESSENCE_PASSIVE_PER_SECOND.plus(f)
+  return base.times(new Decimal(2).pow(m))
+}
+
+export function getEssencePassivePerPulse(state: Pick<GameState, "essencePassiveFlatRank" | "essencePassiveMultiplierRank">): Decimal {
+  return getEssencePassivePerPulseFromRanks(
+    state.essencePassiveFlatRank ?? 0,
+    state.essencePassiveMultiplierRank ?? 0
+  )
 }
 
 export const INITIAL_STATE: GameState = {
   resources: new Decimal(10),
+  essence: new Decimal(1),
   showFps: true,
   lastSaveTime: Date.now(),
   milestoneCurrency: 0,
+  generatorPurchaseDiscountRank: 0,
+  essencePassiveFlatRank: 0,
+  essencePassiveMultiplierRank: 0,
   generators: {
     generator1: {
       id: "generator1",
@@ -43,6 +94,8 @@ export const INITIAL_STATE: GameState = {
       claimedMilestoneExponents: [],
       productionUpgradeRank: 0,
       durationUpgradeRank: 0,
+      critChanceRank: 0,
+      critMultiplierRank: 0,
     },
     generator2: {
       id: "generator2",
@@ -55,6 +108,8 @@ export const INITIAL_STATE: GameState = {
       claimedMilestoneExponents: [],
       productionUpgradeRank: 0,
       durationUpgradeRank: 0,
+      critChanceRank: 0,
+      critMultiplierRank: 0,
     },
     generator3: {
       id: "generator3",
@@ -67,6 +122,8 @@ export const INITIAL_STATE: GameState = {
       claimedMilestoneExponents: [],
       productionUpgradeRank: 0,
       durationUpgradeRank: 0,
+      critChanceRank: 0,
+      critMultiplierRank: 0,
     },
     generator4: {
       id: "generator4",
@@ -79,6 +136,8 @@ export const INITIAL_STATE: GameState = {
       claimedMilestoneExponents: [],
       productionUpgradeRank: 0,
       durationUpgradeRank: 0,
+      critChanceRank: 0,
+      critMultiplierRank: 0,
     },
     generator5: {
       id: "generator5",
@@ -91,6 +150,8 @@ export const INITIAL_STATE: GameState = {
       claimedMilestoneExponents: [],
       productionUpgradeRank: 0,
       durationUpgradeRank: 0,
+      critChanceRank: 0,
+      critMultiplierRank: 0,
     },
     generator6: {
       id: "generator6",
@@ -103,6 +164,8 @@ export const INITIAL_STATE: GameState = {
       claimedMilestoneExponents: [],
       productionUpgradeRank: 0,
       durationUpgradeRank: 0,
+      critChanceRank: 0,
+      critMultiplierRank: 0,
     },
     generator7: {
       id: "generator7",
@@ -115,6 +178,8 @@ export const INITIAL_STATE: GameState = {
       claimedMilestoneExponents: [],
       productionUpgradeRank: 0,
       durationUpgradeRank: 0,
+      critChanceRank: 0,
+      critMultiplierRank: 0,
     },
     generator8: {
       id: "generator8",
@@ -127,6 +192,8 @@ export const INITIAL_STATE: GameState = {
       claimedMilestoneExponents: [],
       productionUpgradeRank: 0,
       durationUpgradeRank: 0,
+      critChanceRank: 0,
+      critMultiplierRank: 0,
     },
     generator9: {
       id: "generator9",
@@ -139,6 +206,8 @@ export const INITIAL_STATE: GameState = {
       claimedMilestoneExponents: [],
       productionUpgradeRank: 0,
       durationUpgradeRank: 0,
+      critChanceRank: 0,
+      critMultiplierRank: 0,
     },
     generator10: {
       id: "generator10",
@@ -151,6 +220,8 @@ export const INITIAL_STATE: GameState = {
       claimedMilestoneExponents: [],
       productionUpgradeRank: 0,
       durationUpgradeRank: 0,
+      critChanceRank: 0,
+      critMultiplierRank: 0,
     },
   },
 }
@@ -353,6 +424,34 @@ export const formatNumber = (num: Decimal): string => {
   return `${finalValue}${suffix}`
 }
 
+/** Pelo menos um gerador com nível ≥ 1 → essência gera passivamente. */
+export function isEssencePassiveUnlocked(generators: Record<string, Generator>): boolean {
+  return Object.values(generators).some((g) => g.level.gt(0))
+}
+
+export function parseEssenceFromSave(raw: unknown): Decimal {
+  try {
+    if (raw === undefined || raw === null) return INITIAL_STATE.essence
+    const d = new Decimal(raw as string | number)
+    if (!d.isFinite()) return INITIAL_STATE.essence
+    return d.lt(0) ? new Decimal(0) : d
+  } catch {
+    return INITIAL_STATE.essence
+  }
+}
+
+/** Formatação da essência (decimais visíveis enquanto &lt; 1000). */
+export function formatEssenceAmount(num: Decimal): string {
+  if (!num.isFinite()) return "0"
+  if (num.lt(1000)) {
+    return num.toNumber().toLocaleString("pt-BR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    })
+  }
+  return formatNumber(num)
+}
+
 export const formatTime = (ms: number): string => {
   const seconds = Math.floor(ms / 1000)
   if (seconds < 60) return `${seconds}s`
@@ -407,11 +506,88 @@ export function getEffectiveProductionPerCycle(gen: Generator): Decimal {
   return gen.baseProduction.times(gen.level).times(mult)
 }
 
-/** Produção por segundo (ciclo efectivo em ms). */
+/** +2,5% de chance de crítico por ranque; máximo 100%. */
+export const CRIT_CHANCE_PER_RANK = 0.025
+export const CRIT_CHANCE_MAX_RANK = 40
+
+/** Acima disto, produção offline usa valor esperado em vez de sortear cada ciclo. */
+export const CRIT_OFFLINE_SIMULATION_CYCLE_CAP = 8000
+
+export function getCritChance(gen: Generator): number {
+  const r = Math.max(0, Math.floor(gen.critChanceRank ?? 0))
+  return Math.min(1, r * CRIT_CHANCE_PER_RANK)
+}
+
+export function formatCritChancePercent(chance01: number): string {
+  const pct = chance01 * 100
+  return `${pct.toLocaleString("pt-BR", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })}%`
+}
+
+export function canBuyCritChanceUpgrade(gen: Generator): boolean {
+  return (gen.critChanceRank ?? 0) < CRIT_CHANCE_MAX_RANK
+}
+
+/** Custo da melhoria de chance de crítico (mais caro que produção/tempo). */
+export function getCritChanceUpgradeCost(currentRank: number): number {
+  const r = Math.max(0, Math.floor(currentRank) || 0)
+  return Math.pow(2, r + 4)
+}
+
+/** Multiplicador quando o crítico dispara: ranque 0 → ×2, 1 → ×4, 2 → ×8… */
+export function getCritMultiplier(gen: Generator): Decimal {
+  const r = Math.max(0, Math.floor(gen.critMultiplierRank ?? 0))
+  return new Decimal(2).pow(r + 1)
+}
+
+export function getCritMultiplierUpgradeCost(currentRank: number): number {
+  const r = Math.max(0, Math.floor(currentRank) || 0)
+  return Math.pow(2, r + 2)
+}
+
+/** Valor esperado por ciclo (média a longo prazo, inclui crítico). */
+export function getExpectedProductionPerCycleWithCrit(gen: Generator): Decimal {
+  const base = getEffectiveProductionPerCycle(gen)
+  const chance = getCritChance(gen)
+  if (chance <= 0) return base
+  const mult = getCritMultiplier(gen)
+  return base.times(new Decimal(1).plus(new Decimal(chance).times(mult.minus(1))))
+}
+
+/**
+ * Produção total de vários ciclos com sorteio de crítico por ciclo.
+ * Para muitos ciclos (ex.: offline), usar valor esperado.
+ */
+export function rollProductionWithCrit(
+  basePerCycle: Decimal,
+  cycles: number,
+  gen: Generator
+): Decimal {
+  if (cycles <= 0) return new Decimal(0)
+  const chance = getCritChance(gen)
+  if (chance <= 0) return basePerCycle.times(cycles)
+  if (cycles > CRIT_OFFLINE_SIMULATION_CYCLE_CAP) {
+    return getExpectedProductionPerCycleWithCrit(gen).times(cycles)
+  }
+  const mult = getCritMultiplier(gen)
+  let total = new Decimal(0)
+  for (let i = 0; i < cycles; i++) {
+    let p = basePerCycle
+    if (Math.random() < chance) {
+      p = p.times(mult)
+    }
+    total = total.plus(p)
+  }
+  return total
+}
+
+/** Produção por segundo (ciclo efectivo em ms), média esperada com crítico. */
 export function getEffectiveProductionPerSecond(gen: Generator): Decimal {
   const dur = getEffectiveDuration(gen)
   if (dur <= 0) return new Decimal(0)
-  return getEffectiveProductionPerCycle(gen).times(1000).div(dur)
+  return getExpectedProductionPerCycleWithCrit(gen).times(1000).div(dur)
 }
 
 /** Custo da próxima melhoria: 1, 2, 4, … = 2^ranque actual. */
@@ -437,7 +613,240 @@ export function formatCycleDuration(ms: number): string {
   return formatTime(ms)
 }
 
-export const getGeneratorCost = (generator: Generator): Decimal => {
-  // Cost formula: baseCost * 1.5 ^ level
-  return generator.baseCost.times(new Decimal(1.5).pow(generator.level))
+/**
+ * Quantidade (unidades possuídas) do gerador (n−1) consumida para comprar uma unidade do gerador n.
+ * Balanceamento: G2←10, G3←50, G4←250, G5←5k, G6←25k, G7←500k, G8←2,5M, G9←50M, G10←250M.
+ */
+const PREVIOUS_GENERATOR_QUANTITY_COST: Record<number, number> = {
+  2: 10,
+  3: 50,
+  4: 250,
+  5: 5_000,
+  6: 25_000,
+  7: 500_000,
+  8: 2_500_000,
+  9: 50_000_000,
+  10: 250_000_000,
+}
+
+/**
+ * Quantidade do gerador anterior a consumir (0 para o gerador 1).
+ * `purchaseDiscountRank`: mesmo desconto global que o recurso base (÷2 por ranque, acumula).
+ */
+export function getPreviousGeneratorQuantityCost(
+  generatorNumber: number,
+  purchaseDiscountRank = 0
+): Decimal {
+  const n = Math.floor(generatorNumber)
+  if (n <= 1) return new Decimal(0)
+  const v = PREVIOUS_GENERATOR_QUANTITY_COST[n]
+  const raw =
+    typeof v === "number" && Number.isFinite(v) ? new Decimal(v) : new Decimal(0)
+  const r = Math.max(0, Math.floor(purchaseDiscountRank) || 0)
+  return raw.div(new Decimal(2).pow(r))
+}
+
+/** Custo em recurso base antes do desconto global (preço fixo por gerador). */
+export function getGeneratorBaseCostBeforeDiscount(generator: Generator): Decimal {
+  return generator.baseCost
+}
+
+/**
+ * Custo em recurso base para comprar mais uma unidade do gerador (fixo por tipo, salvo desconto global).
+ * `purchaseDiscountRank`: ranques globais que cortam metade cada (÷2 por ranque); o mesmo ranque reduz
+ * a quantidade exigida do gerador anterior — ver `getPreviousGeneratorQuantityCost`.
+ */
+export const getGeneratorCost = (
+  generator: Generator,
+  purchaseDiscountRank = 0
+): Decimal => {
+  const r = Math.max(0, Math.floor(purchaseDiscountRank) || 0)
+  const base = getGeneratorBaseCostBeforeDiscount(generator)
+  return base.div(new Decimal(2).pow(r))
+}
+
+/** Moedas de marco para o próximo ranque de desconto global na compra de geradores. */
+export function getGlobalPurchaseDiscountUpgradeCost(currentRank: number): number {
+  return getNextMilestoneUpgradeCost(currentRank)
+}
+
+/** Modo de compra em lote no footer (1×, % do recurso base, ou até o próximo marco). */
+export type BulkPurchaseMode = "1" | "p1" | "p10" | "p50" | "p100" | "marco"
+
+const MAX_BULK_PURCHASE_ITERATIONS = 200_000
+
+/**
+ * Limite de simulação só para o texto do botão (modos % / Marco). Evita bloquear o UI quando cada
+ * compra é muito barata e o lote real vai a centenas de milhares. A compra efectiva usa
+ * `MAX_BULK_PURCHASE_ITERATIONS`.
+ */
+export const BULK_PREVIEW_MAX_ITERATIONS = 2_500
+
+function cloneGeneratorsMap(g: Record<string, Generator>): Record<string, Generator> {
+  const o: Record<string, Generator> = {}
+  for (const k of Object.keys(g)) {
+    const x = g[k]!
+    o[k] = {
+      ...x,
+      level: new Decimal(x.level),
+      baseCost: new Decimal(x.baseCost),
+      baseProduction: new Decimal(x.baseProduction),
+      claimedMilestoneExponents: [...(x.claimedMilestoneExponents ?? [])],
+    }
+  }
+  return o
+}
+
+function cloneGameStateForSim(state: GameState): GameState {
+  return {
+    ...state,
+    resources: new Decimal(state.resources),
+    essence: new Decimal(state.essence),
+    generators: cloneGeneratorsMap(state.generators),
+  }
+}
+
+/**
+ * Uma compra de gerador (imutável). `null` se não der.
+ */
+export function applyOneGeneratorPurchase(state: GameState, id: string): GameState | null {
+  const gen = state.generators[id]
+  if (!gen) return null
+  const rank = state.generatorPurchaseDiscountRank ?? 0
+  const genNum = parseInt(id.replace("generator", ""), 10) || 0
+  const prevQuantityCost = getPreviousGeneratorQuantityCost(genNum, rank)
+  const prevId = genNum > 1 ? `generator${genNum - 1}` : null
+  if (prevId && prevQuantityCost.gt(0)) {
+    const prevGen = state.generators[prevId]
+    if (!prevGen || prevGen.level.lt(prevQuantityCost)) return null
+  }
+  const cost = getGeneratorCost(gen, rank)
+  if (state.resources.lt(cost)) return null
+  if (state.essence.lt(GENERATOR_ESSENCE_COST)) return null
+
+  const nextGenerators = { ...state.generators }
+  if (prevId && prevQuantityCost.gt(0)) {
+    const p = nextGenerators[prevId]!
+    nextGenerators[prevId] = {
+      ...p,
+      level: p.level.minus(prevQuantityCost),
+    }
+  }
+  nextGenerators[id] = {
+    ...gen,
+    level: gen.level.plus(1),
+    claimedMilestoneExponents: gen.claimedMilestoneExponents ?? [],
+  }
+
+  return {
+    ...state,
+    resources: state.resources.minus(cost),
+    essence: state.essence.minus(GENERATOR_ESSENCE_COST),
+    generators: nextGenerators,
+  }
+}
+
+/**
+ * Quantas unidades seriam compradas com o modo atual (simulação; não altera o estado real).
+ */
+export function countGeneratorPurchasesForMode(
+  state: GameState,
+  id: string,
+  mode: BulkPurchaseMode,
+  options?: { maxIterations?: number }
+): number {
+  return applyBulkGeneratorPurchasesWithCount(state, id, mode, options).count
+}
+
+export interface BulkPurchaseResult {
+  state: GameState
+  count: number
+  /** `true` se ainda era possível continuar mas o limite de iterações foi atingido. */
+  capped: boolean
+}
+
+/**
+ * Aplica compras em lote e devolve estado final + quantidade (0 se nada).
+ */
+export function applyBulkGeneratorPurchasesWithCount(
+  state: GameState,
+  id: string,
+  mode: BulkPurchaseMode,
+  options?: { maxIterations?: number }
+): BulkPurchaseResult {
+  const maxIterations = Math.min(
+    MAX_BULK_PURCHASE_ITERATIONS,
+    Math.max(1, Math.floor(options?.maxIterations ?? MAX_BULK_PURCHASE_ITERATIONS))
+  )
+
+  if (mode === "1") {
+    const next = applyOneGeneratorPurchase(state, id)
+    if (!next) return { state, count: 0, capped: false }
+    return { state: next, count: 1, capped: false }
+  }
+
+  let sim = cloneGameStateForSim(state)
+  let count = 0
+
+  if (mode === "marco") {
+    while (count < maxIterations) {
+      const g = sim.generators[id]
+      if (!g) break
+      const goal = getNextMilestoneGoalForBar(g.level, g.claimedMilestoneExponents ?? [])
+      if (!g.level.lt(goal)) break
+      const next = applyOneGeneratorPurchase(sim, id)
+      if (!next) break
+      sim = next
+      count++
+    }
+    let capped = false
+    if (count >= maxIterations) {
+      const g = sim.generators[id]
+      if (g) {
+        const goal = getNextMilestoneGoalForBar(g.level, g.claimedMilestoneExponents ?? [])
+        if (g.level.lt(goal) && applyOneGeneratorPurchase(sim, id) !== null) {
+          capped = true
+        }
+      }
+    }
+    return { state: sim, count, capped }
+  }
+
+  const pct =
+    mode === "p1" ? 0.01 : mode === "p10" ? 0.1 : mode === "p50" ? 0.5 : 1
+  /** Orçamento em recurso base e em essência (cada um = % do que há no início da compra). */
+  const budgetBase = sim.resources.times(pct)
+  const budgetEssence = sim.essence.times(pct)
+  let spentBase = new Decimal(0)
+  let spentEssence = new Decimal(0)
+
+  while (count < maxIterations) {
+    const g = sim.generators[id]
+    if (!g) break
+    const cost = getGeneratorCost(g, sim.generatorPurchaseDiscountRank ?? 0)
+    if (spentBase.plus(cost).gt(budgetBase)) break
+    if (spentEssence.plus(GENERATOR_ESSENCE_COST).gt(budgetEssence)) break
+    const next = applyOneGeneratorPurchase(sim, id)
+    if (!next) break
+    sim = next
+    spentBase = spentBase.plus(cost)
+    spentEssence = spentEssence.plus(GENERATOR_ESSENCE_COST)
+    count++
+  }
+
+  let capped = false
+  if (count >= maxIterations) {
+    const g = sim.generators[id]
+    if (g) {
+      const cost = getGeneratorCost(g, sim.generatorPurchaseDiscountRank ?? 0)
+      const budgetOk =
+        !spentBase.plus(cost).gt(budgetBase) &&
+        !spentEssence.plus(GENERATOR_ESSENCE_COST).gt(budgetEssence)
+      if (budgetOk && applyOneGeneratorPurchase(sim, id) !== null) {
+        capped = true
+      }
+    }
+  }
+
+  return { state: sim, count, capped }
 }
