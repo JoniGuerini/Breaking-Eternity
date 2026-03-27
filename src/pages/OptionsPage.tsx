@@ -1,5 +1,4 @@
 import React from "react"
-import { useTheme } from "@/components/theme-provider"
 import { useGame } from "@/components/game-provider"
 import { 
   Card, 
@@ -11,11 +10,7 @@ import {
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
-import { 
-  Sun, 
-  Moon, 
-  Trash2 
-} from "lucide-react"
+import { Trash2 } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,7 +24,6 @@ import {
 } from "@/components/ui/alert-dialog"
 
 export const OptionsPage: React.FC = () => {
-  const { theme, setTheme } = useTheme()
   const { state, toggleFps, resetGame } = useGame()
 
   return (
@@ -39,25 +33,9 @@ export const OptionsPage: React.FC = () => {
         <Card>
           <CardHeader>
             <CardTitle>Configurações Visuais</CardTitle>
-            <CardDescription>Ajuste a aparência e performance do jogo</CardDescription>
+            <CardDescription>Performance e informação na interface</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label className="text-base font-semibold">Esquema de Cores</Label>
-                <p className="text-sm text-muted-foreground">Alternar entre tema claro e escuro</p>
-              </div>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              >
-                <Sun className="h-4 w-4 dark:hidden" />
-                <Moon className="h-4 w-4 hidden dark:block" />
-                <span className="sr-only">Alternar tema</span>
-              </Button>
-            </div>
-
             <div className="flex items-center justify-between">
               <div className="space-y-0.5">
                 <Label className="text-base font-semibold">Contador de FPS</Label>

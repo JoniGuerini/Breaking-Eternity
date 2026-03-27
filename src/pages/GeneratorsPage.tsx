@@ -160,6 +160,13 @@ const GeneratorRow: React.FC<{
   claimGeneratorMilestones,
   registerBar,
 }) => {
+  const setProductionBarRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      registerBar(gen.id, el)
+    },
+    [gen.id, registerBar]
+  )
+
   const genIndex = parseInt(gen.id.replace("generator", ""), 10) || 1
   const cost = getGeneratorCost(gen, purchaseDiscountRank)
   const prevQuantityCost = getPreviousGeneratorQuantityCost(
@@ -181,17 +188,17 @@ const GeneratorRow: React.FC<{
   const barShowPerSecond = effectiveDurMs < PRODUCTION_BAR_VISUAL_SLOW_THRESHOLD_MS
   const productionPerSecond = getEffectiveProductionPerSecond(gen)
   const claimed = gen.claimedMilestoneExponents ?? []
-  const pendingMarcos = countPendingMilestones(gen.level, claimed)
+  const pendingMarcos = countPendingMilestones(gen.quantity, claimed)
   const pendingMilestoneCoins = getPendingMilestoneCurrency(
-    gen.level,
+    gen.quantity,
     claimed,
     genIndex
   )
   const pendingMilestoneCoinsLabel = formatNumber(
     new Decimal(pendingMilestoneCoins)
   )
-  const milestoneFill = getMilestoneBarProgress(gen.level, claimed)
-  const nextMarco = getNextMilestoneGoalForBar(gen.level, claimed)
+  const milestoneFill = getMilestoneBarProgress(gen.quantity, claimed)
+  const nextMarco = getNextMilestoneGoalForBar(gen.quantity, claimed)
   const timerRef = useRef<any>(null)
 
   const stopBuying = useCallback(() => {
@@ -261,7 +268,7 @@ const GeneratorRow: React.FC<{
                 />
                 <div className="relative flex h-full items-center justify-center px-1.5">
                   <span className="text-[13px] font-semibold font-sans tabular-nums leading-none tracking-normal text-neutral-950 dark:text-white dark:drop-shadow-[0_0_1px_rgba(0,0,0,0.55),0_1px_2px_rgba(0,0,0,0.35)]">
-                    {formatNumber(gen.level)}
+                    {formatNumber(gen.quantity)}
                   </span>
                 </div>
               </div>
@@ -296,15 +303,12 @@ const GeneratorRow: React.FC<{
       </Tooltip>
 
       {/* 3. Progress Bar Card */}
-      <div className="flex-1 relative h-10 bg-[hsl(var(--progress-bg))] rounded-lg overflow-hidden border border-muted-foreground/15 shadow-inner group">
-        {/* Base Fill - GPU Accelerated */}
-        <div 
-          ref={(el) => registerBar(gen.id, el)}
-          className="absolute top-0 left-0 h-full w-full bg-[hsl(var(--progress-fill))] border-r border-[hsl(var(--progress-fill))/0.5] origin-left will-change-transform"
-          style={{ transform: 'scaleX(0)' }}
+      <div className="group relative h-10 flex-1 overflow-hidden rounded-lg border border-muted-foreground/15 bg-[hsl(var(--progress-bg))] shadow-inner">
+        <div
+          ref={setProductionBarRef}
+          className="absolute left-0 top-0 h-full w-full origin-left bg-[hsl(var(--progress-fill))] border-r border-[hsl(var(--progress-fill))/0.5] will-change-transform"
+          style={{ transform: "scaleX(0)" }}
         />
-        
-        {/* Texto com mix-blend-difference; ícones / mini-cartão fora dessa camada → cor sólida opaca. */}
         <div
           className={`pointer-events-none absolute inset-0 flex items-center px-5 font-sans text-[14px] font-medium tabular-nums tracking-normal ${
             barShowPerSecond ? "justify-end" : "justify-between"
@@ -488,7 +492,7 @@ export const GeneratorsPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.keys(offlineProgress.finalLevels)
+                    {Object.keys(offlineProgress.finalQuantities)
                       .sort(
                         (a, b) =>
                           parseInt(a.replace("generator", ""), 10) -
@@ -496,9 +500,9 @@ export const GeneratorsPage: React.FC = () => {
                       )
                       .map((id) => {
                         const initial =
-                          offlineProgress.initialLevels[id] ?? new Decimal(0)
+                          offlineProgress.initialQuantities[id] ?? new Decimal(0)
                         const final =
-                          offlineProgress.finalLevels[id] ?? new Decimal(0)
+                          offlineProgress.finalQuantities[id] ?? new Decimal(0)
                         const gained = final.minus(initial)
 
                         return (

@@ -3,9 +3,9 @@ import Decimal from "break_eternity.js"
 export interface Generator {
   id: string
   name: string
-  /** Quantidade possuída; Decimal para suportar valores >> Number.MAX_SAFE_INTEGER. */
-  level: Decimal
-  /** Preço fixo em recurso base por cada compra (não escala com o nível). */
+  /** Quantidade de unidades possuídas deste gerador (não confundir com ranques de melhoria). */
+  quantity: Decimal
+  /** Preço fixo em recurso base por cada compra (não escala com a quantidade possuída). */
   baseCost: Decimal
   baseProduction: Decimal
   duration: number // in ms
@@ -26,7 +26,7 @@ export interface GameState {
   resources: Decimal
   /**
    * Recurso secundário: cada compra de gerador consome `GENERATOR_ESSENCE_COST`.
-   * Gera passivamente em ciclos de `ESSENCE_PASSIVE_CYCLE_MS` ms após existir pelo menos um gerador com nível ≥ 1.
+   * Gera passivamente em ciclos de `ESSENCE_PASSIVE_CYCLE_MS` ms após existir pelo menos um gerador com quantidade ≥ 1.
    * Quantidade por ciclo: ver `getEssencePassivePerPulse`.
    */
   essence: Decimal
@@ -86,7 +86,7 @@ export const INITIAL_STATE: GameState = {
     generator1: {
       id: "generator1",
       name: "Gerador 1",
-      level: new Decimal(0),
+      quantity: new Decimal(0),
       baseCost: new Decimal(10),
       baseProduction: new Decimal(3),
       duration: 2000,
@@ -100,7 +100,7 @@ export const INITIAL_STATE: GameState = {
     generator2: {
       id: "generator2",
       name: "Gerador 2",
-      level: new Decimal(0),
+      quantity: new Decimal(0),
       baseCost: new Decimal(100),
       baseProduction: new Decimal(4),
       duration: 4000,
@@ -114,7 +114,7 @@ export const INITIAL_STATE: GameState = {
     generator3: {
       id: "generator3",
       name: "Gerador 3",
-      level: new Decimal(0),
+      quantity: new Decimal(0),
       baseCost: new Decimal(1000),
       baseProduction: new Decimal(5),
       duration: 8000,
@@ -128,7 +128,7 @@ export const INITIAL_STATE: GameState = {
     generator4: {
       id: "generator4",
       name: "Gerador 4",
-      level: new Decimal(0),
+      quantity: new Decimal(0),
       baseCost: new Decimal(10000),
       baseProduction: new Decimal(6),
       duration: 16000,
@@ -142,7 +142,7 @@ export const INITIAL_STATE: GameState = {
     generator5: {
       id: "generator5",
       name: "Gerador 5",
-      level: new Decimal(0),
+      quantity: new Decimal(0),
       baseCost: new Decimal(100000),
       baseProduction: new Decimal(7),
       duration: 32000,
@@ -156,7 +156,7 @@ export const INITIAL_STATE: GameState = {
     generator6: {
       id: "generator6",
       name: "Gerador 6",
-      level: new Decimal(0),
+      quantity: new Decimal(0),
       baseCost: new Decimal(1000000),
       baseProduction: new Decimal(8),
       duration: 64000,
@@ -170,7 +170,7 @@ export const INITIAL_STATE: GameState = {
     generator7: {
       id: "generator7",
       name: "Gerador 7",
-      level: new Decimal(0),
+      quantity: new Decimal(0),
       baseCost: new Decimal(10000000),
       baseProduction: new Decimal(9),
       duration: 128000,
@@ -184,7 +184,7 @@ export const INITIAL_STATE: GameState = {
     generator8: {
       id: "generator8",
       name: "Gerador 8",
-      level: new Decimal(0),
+      quantity: new Decimal(0),
       baseCost: new Decimal(100000000),
       baseProduction: new Decimal(10),
       duration: 256000,
@@ -198,7 +198,7 @@ export const INITIAL_STATE: GameState = {
     generator9: {
       id: "generator9",
       name: "Gerador 9",
-      level: new Decimal(0),
+      quantity: new Decimal(0),
       baseCost: new Decimal(1000000000),
       baseProduction: new Decimal(11),
       duration: 512000,
@@ -212,7 +212,7 @@ export const INITIAL_STATE: GameState = {
     generator10: {
       id: "generator10",
       name: "Gerador 10",
-      level: new Decimal(0),
+      quantity: new Decimal(0),
       baseCost: new Decimal(10000000000),
       baseProduction: new Decimal(12),
       duration: 1024000,
@@ -246,8 +246,8 @@ const getLetterSuffix = (index: number): string => {
   return ` ${result}` // Add space before suffix
 }
 
-/** Nível de gerador a partir de save (número, string ou Decimal). */
-export function parseGeneratorLevel(raw: unknown): Decimal {
+/** Quantidade possuída do gerador a partir de save (número, string ou Decimal). */
+export function parseGeneratorQuantity(raw: unknown): Decimal {
   if (raw instanceof Decimal && raw.isFinite()) return raw
   if (typeof raw === "number" && Number.isFinite(raw)) return new Decimal(raw)
   if (typeof raw === "string" && raw.trim() !== "") {
@@ -257,6 +257,9 @@ export function parseGeneratorLevel(raw: unknown): Decimal {
   return new Decimal(0)
 }
 
+/** @deprecated Usar `parseGeneratorQuantity`. Mantido para saves legados com chave `level`. */
+export const parseGeneratorLevel = parseGeneratorQuantity
+
 const MAX_MILESTONE_EXP = 300
 
 /** Limiar 10^e como Decimal (evita Math.pow com expoentes grandes). */
@@ -265,19 +268,19 @@ export function milestoneThresholdDecimal(exp: number): Decimal {
   return new Decimal(10).pow(Math.floor(exp))
 }
 
-/** Próximo marco estritamente acima do nível actual (potência de 10). */
-export function getNextMilestoneThreshold(level: Decimal): Decimal {
-  if (level.lt(10)) return new Decimal(10)
+/** Próximo marco estritamente acima da quantidade actual (potência de 10). */
+export function getNextMilestoneThreshold(ownedQuantity: Decimal): Decimal {
+  if (ownedQuantity.lt(10)) return new Decimal(10)
   let m = new Decimal(10)
-  while (m.lte(level)) {
+  while (m.lte(ownedQuantity)) {
     m = m.times(10)
   }
   return m
 }
 
-/** Próximo limiar de marco a exibir / perseguir: menor 10^e não resgatado com 10^e ≥ nível. */
+/** Próximo limiar de marco a exibir / perseguir: menor 10^e não resgatado com 10^e ≥ quantidade possuída. */
 export function getNextMilestoneGoalForBar(
-  level: Decimal,
+  ownedQuantity: Decimal,
   claimed: readonly number[]
 ): Decimal {
   const set = new Set(claimed)
@@ -285,41 +288,41 @@ export function getNextMilestoneGoalForBar(
     const th = milestoneThresholdDecimal(e)
     if (!th.isFinite()) break
     if (set.has(e)) continue
-    if (th.gte(level)) return th
+    if (th.gte(ownedQuantity)) return th
   }
-  return getNextMilestoneThreshold(level)
+  return getNextMilestoneThreshold(ownedQuantity)
 }
 
 /** Barra 0–1 entre o limiar anterior (goal/10) e o próximo marco ainda não resgatado. */
 export function getMilestoneBarProgress(
-  level: Decimal,
+  ownedQuantity: Decimal,
   claimed: readonly number[]
 ): number {
-  if (level.lt(0)) return 0
-  const goal = getNextMilestoneGoalForBar(level, claimed)
+  if (ownedQuantity.lt(0)) return 0
+  const goal = getNextMilestoneGoalForBar(ownedQuantity, claimed)
   const ten = new Decimal(10)
   if (goal.lte(ten)) {
     const denom = Decimal.max(goal, ten)
-    const r = level.div(denom).toNumber()
+    const r = ownedQuantity.div(denom).toNumber()
     return Math.min(1, Math.max(0, Number.isFinite(r) ? r : 0))
   }
   const prevBound = goal.div(10)
   const span = goal.minus(prevBound)
   if (span.lte(0)) return 1
-  const r = level.minus(prevBound).div(span).toNumber()
+  const r = ownedQuantity.minus(prevBound).div(span).toNumber()
   return Math.min(1, Math.max(0, Number.isFinite(r) ? r : 0))
 }
 
-/** Quantos marcos elegíveis (nível atual ≥ 10^e) ainda não resgatados. */
+/** Quantos marcos elegíveis (quantidade possuída ≥ 10^e) ainda não resgatados. */
 export function countPendingMilestones(
-  level: Decimal,
+  ownedQuantity: Decimal,
   claimedExponents: readonly number[]
 ): number {
   const claimed = new Set(claimedExponents)
   let n = 0
   for (let e = 1; e <= MAX_MILESTONE_EXP; e++) {
     const th = milestoneThresholdDecimal(e)
-    if (!th.isFinite() || th.gt(level)) break
+    if (!th.isFinite() || th.gt(ownedQuantity)) break
     if (!claimed.has(e)) n++
   }
   return n
@@ -335,9 +338,9 @@ export function getMilestoneCoinReward(
   return g * e
 }
 
-/** Soma das moedas dos marcos pendentes (nível ≥ limiar e ainda não resgatados). */
+/** Soma das moedas dos marcos pendentes (quantidade ≥ limiar e ainda não resgatados). */
 export function getPendingMilestoneCurrency(
-  level: Decimal,
+  ownedQuantity: Decimal,
   claimedExponents: readonly number[],
   generatorIndex: number
 ): number {
@@ -345,7 +348,7 @@ export function getPendingMilestoneCurrency(
   let sum = 0
   for (let e = 1; e <= MAX_MILESTONE_EXP; e++) {
     const th = milestoneThresholdDecimal(e)
-    if (!th.isFinite() || th.gt(level)) break
+    if (!th.isFinite() || th.gt(ownedQuantity)) break
     if (!claimed.has(e)) sum += getMilestoneCoinReward(generatorIndex, e)
   }
   return sum
@@ -360,14 +363,14 @@ export function getTotalPendingMilestoneCurrency(
     const gen = generators[id]
     const genIndex = parseInt(id.replace("generator", ""), 10) || 1
     const claimed = gen.claimedMilestoneExponents ?? []
-    sum += getPendingMilestoneCurrency(gen.level, claimed, genIndex)
+    sum += getPendingMilestoneCurrency(gen.quantity, claimed, genIndex)
   }
   return sum
 }
 
 /** Resgata todos os marcos atualmente válidos; moedas = índice do gerador × nº do marco (1, 2, 3…). */
 export function claimEligibleMilestones(
-  level: Decimal,
+  ownedQuantity: Decimal,
   claimedExponents: readonly number[],
   generatorIndex: number
 ): { nextClaimed: number[]; coinsGained: number } {
@@ -375,7 +378,7 @@ export function claimEligibleMilestones(
   let coinsGained = 0
   for (let e = 1; e <= MAX_MILESTONE_EXP; e++) {
     const th = milestoneThresholdDecimal(e)
-    if (!th.isFinite() || th.gt(level)) break
+    if (!th.isFinite() || th.gt(ownedQuantity)) break
     if (!set.has(e)) {
       set.add(e)
       coinsGained += getMilestoneCoinReward(generatorIndex, e)
@@ -424,9 +427,9 @@ export const formatNumber = (num: Decimal): string => {
   return `${finalValue}${suffix}`
 }
 
-/** Pelo menos um gerador com nível ≥ 1 → essência gera passivamente. */
+/** Pelo menos um gerador com quantidade ≥ 1 → essência gera passivamente. */
 export function isEssencePassiveUnlocked(generators: Record<string, Generator>): boolean {
-  return Object.values(generators).some((g) => g.level.gt(0))
+  return Object.values(generators).some((g) => g.quantity.gt(0))
 }
 
 export function parseEssenceFromSave(raw: unknown): Decimal {
@@ -499,11 +502,11 @@ export function getProductionMultiplier(rank: number): Decimal {
   return new Decimal(2).pow(r)
 }
 
-/** Produção por ciclo completo (nível × base × 2^ranque produção). */
+/** Produção por ciclo completo (quantidade × base × 2^ranque produção). */
 export function getEffectiveProductionPerCycle(gen: Generator): Decimal {
-  if (!gen.level.isFinite() || gen.level.lte(0)) return new Decimal(0)
+  if (!gen.quantity.isFinite() || gen.quantity.lte(0)) return new Decimal(0)
   const mult = getProductionMultiplier(gen.productionUpgradeRank ?? 0)
-  return gen.baseProduction.times(gen.level).times(mult)
+  return gen.baseProduction.times(gen.quantity).times(mult)
 }
 
 /** +2,5% de chance de crítico por ranque; máximo 100%. */
@@ -688,7 +691,7 @@ function cloneGeneratorsMap(g: Record<string, Generator>): Record<string, Genera
     const x = g[k]!
     o[k] = {
       ...x,
-      level: new Decimal(x.level),
+      quantity: new Decimal(x.quantity),
       baseCost: new Decimal(x.baseCost),
       baseProduction: new Decimal(x.baseProduction),
       claimedMilestoneExponents: [...(x.claimedMilestoneExponents ?? [])],
@@ -718,7 +721,7 @@ export function applyOneGeneratorPurchase(state: GameState, id: string): GameSta
   const prevId = genNum > 1 ? `generator${genNum - 1}` : null
   if (prevId && prevQuantityCost.gt(0)) {
     const prevGen = state.generators[prevId]
-    if (!prevGen || prevGen.level.lt(prevQuantityCost)) return null
+    if (!prevGen || prevGen.quantity.lt(prevQuantityCost)) return null
   }
   const cost = getGeneratorCost(gen, rank)
   if (state.resources.lt(cost)) return null
@@ -729,12 +732,12 @@ export function applyOneGeneratorPurchase(state: GameState, id: string): GameSta
     const p = nextGenerators[prevId]!
     nextGenerators[prevId] = {
       ...p,
-      level: p.level.minus(prevQuantityCost),
+      quantity: p.quantity.minus(prevQuantityCost),
     }
   }
   nextGenerators[id] = {
     ...gen,
-    level: gen.level.plus(1),
+    quantity: gen.quantity.plus(1),
     claimedMilestoneExponents: gen.claimedMilestoneExponents ?? [],
   }
 
@@ -792,8 +795,8 @@ export function applyBulkGeneratorPurchasesWithCount(
     while (count < maxIterations) {
       const g = sim.generators[id]
       if (!g) break
-      const goal = getNextMilestoneGoalForBar(g.level, g.claimedMilestoneExponents ?? [])
-      if (!g.level.lt(goal)) break
+      const goal = getNextMilestoneGoalForBar(g.quantity, g.claimedMilestoneExponents ?? [])
+      if (!g.quantity.lt(goal)) break
       const next = applyOneGeneratorPurchase(sim, id)
       if (!next) break
       sim = next
@@ -803,8 +806,8 @@ export function applyBulkGeneratorPurchasesWithCount(
     if (count >= maxIterations) {
       const g = sim.generators[id]
       if (g) {
-        const goal = getNextMilestoneGoalForBar(g.level, g.claimedMilestoneExponents ?? [])
-        if (g.level.lt(goal) && applyOneGeneratorPurchase(sim, id) !== null) {
+        const goal = getNextMilestoneGoalForBar(g.quantity, g.claimedMilestoneExponents ?? [])
+        if (g.quantity.lt(goal) && applyOneGeneratorPurchase(sim, id) !== null) {
           capped = true
         }
       }

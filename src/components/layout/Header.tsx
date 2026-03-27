@@ -5,7 +5,13 @@ import {
   ResourceGlyph,
   type ResourceGlyphKind,
 } from "@/components/resource-glyph"
-import { formatEssenceAmount, formatNumber } from "@/lib/game-logic"
+import {
+  ESSENCE_PASSIVE_CYCLE_MS,
+  formatEssenceAmount,
+  formatNumber,
+  getEssencePassivePerPulse,
+  isEssencePassiveUnlocked,
+} from "@/lib/game-logic"
 
 /** Larguras fixas (px) — layout não responsivo, espaço pré-definido por cartão. */
 const TITLE_W = "w-[220px]"
@@ -18,12 +24,16 @@ function ResourceStatCard({
   value,
   labelClassName,
   valueClassName,
+  secondaryValue,
+  secondaryClassName,
 }: {
   glyphKind: ResourceGlyphKind
   label: string
   value: string
   labelClassName: string
   valueClassName: string
+  secondaryValue?: string
+  secondaryClassName?: string
 }) {
   return (
     <div
@@ -37,18 +47,32 @@ function ResourceStatCard({
           {label}
         </span>
       </span>
-      <span
-        className={`mt-1.5 min-h-[1.5rem] truncate text-left text-lg font-bold font-sans leading-tight tabular-nums tracking-normal ${valueClassName}`}
-        title={value}
-      >
-        {value}
-      </span>
+      <div className="mt-1.5 flex min-h-[1.5rem] min-w-0 items-baseline gap-2">
+        <span
+          className={`min-w-0 flex-1 truncate text-left text-lg font-bold font-sans leading-tight tabular-nums tracking-normal ${valueClassName}`}
+          title={value}
+        >
+          {value}
+        </span>
+        {secondaryValue != null ? (
+          <span
+            className={`shrink-0 text-right text-[11px] font-semibold font-sans tabular-nums leading-none tracking-normal ${secondaryClassName ?? "text-muted-foreground"}`}
+            title={secondaryValue}
+          >
+            {secondaryValue}
+          </span>
+        ) : null}
+      </div>
     </div>
   )
 }
 
 export const Header: React.FC = () => {
   const { state } = useGame()
+
+  const essencePerSecond = isEssencePassiveUnlocked(state.generators)
+    ? getEssencePassivePerPulse(state).times(1000 / ESSENCE_PASSIVE_CYCLE_MS)
+    : new Decimal(0)
 
   return (
     <header className="relative z-50 flex min-h-[88px] shrink-0 items-center justify-between gap-4 overflow-x-auto border-b border-muted-foreground/10 bg-secondary/50 px-4 py-3 supports-[backdrop-filter]:backdrop-blur-sm">
@@ -74,6 +98,8 @@ export const Header: React.FC = () => {
           value={formatEssenceAmount(state.essence)}
           labelClassName="text-emerald-700/90 dark:text-emerald-400/90"
           valueClassName="text-emerald-700 dark:text-emerald-400"
+          secondaryValue={`${formatNumber(essencePerSecond)}/s`}
+          secondaryClassName="text-emerald-600/90 dark:text-emerald-300/90"
         />
         <ResourceStatCard
           glyphKind="milestone"

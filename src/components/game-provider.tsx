@@ -9,7 +9,7 @@ import {
   type GameState,
   INITIAL_STATE,
   claimEligibleMilestones,
-  parseGeneratorLevel,
+  parseGeneratorQuantity,
   getEffectiveDuration,
   getEffectiveProductionPerCycle,
   getExpectedProductionPerCycleWithCrit,
@@ -57,8 +57,11 @@ function mergeGeneratorFromSave(base: Generator, gen: any): Generator {
   durR = Math.min(durR, getDurationUpgradeCap(base.duration))
   return {
     ...base,
-    level: parseGeneratorLevel(gen.level),
-    progress: gen.progress || 0,
+    quantity: parseGeneratorQuantity(gen.quantity ?? gen.level),
+    progress:
+      typeof gen.progress === "number" && Number.isFinite(gen.progress)
+        ? gen.progress
+        : 0,
     claimedMilestoneExponents: Array.isArray(gen.claimedMilestoneExponents)
       ? gen.claimedMilestoneExponents
       : [],
@@ -99,8 +102,9 @@ interface GameContextType {
 export interface OfflineProgress {
   resourcesGained: Decimal
   essenceGained: Decimal
-  initialLevels: Record<string, Decimal>
-  finalLevels: Record<string, Decimal>
+  /** Quantidade de cada gerador antes / depois do período offline. */
+  initialQuantities: Record<string, Decimal>
+  finalQuantities: Record<string, Decimal>
   timeOffline: number
 }
 
@@ -160,7 +164,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
 
         genIds.forEach(id => {
           const gen = mergedGenerators[id]
-          if (gen.level.gt(0)) {
+          if (gen.quantity.gt(0)) {
             const dur = getEffectiveDuration(gen)
             const totalPotentialTime = offlineTime + (gen.progress * dur)
             const cycles = Math.floor(totalPotentialTime / dur)
@@ -176,7 +180,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
               if (mergedGenerators[targetId]) {
                 mergedGenerators[targetId] = {
                   ...mergedGenerators[targetId],
-                  level: mergedGenerators[targetId].level.plus(production),
+                  quantity: mergedGenerators[targetId].quantity.plus(production),
                 }
               }
             }
@@ -249,7 +253,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
       if (offlineTime < 5000) return null
 
       let resourcesGained = new Decimal(0)
-      const initialLevels: Record<string, Decimal> = {}
+      const initialQuantities: Record<string, Decimal> = {}
       const tempGenerators = { ...INITIAL_STATE.generators }
 
       if (parsed.generators) {
@@ -261,7 +265,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       Object.keys(tempGenerators).forEach((id) => {
-        initialLevels[id] = new Decimal(tempGenerators[id].level)
+        initialQuantities[id] = new Decimal(tempGenerators[id].quantity)
       })
 
       const genIds = Object.keys(tempGenerators).sort((a, b) => {
@@ -274,7 +278,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
 
       genIds.forEach(id => {
         const gen = tempGenerators[id]
-        if (gen.level.gt(0)) {
+        if (gen.quantity.gt(0)) {
           const dur = getEffectiveDuration(gen)
           const totalPotentialTime = offlineTime + (gen.progress * dur)
           const cycles = Math.floor(totalPotentialTime / dur)
@@ -289,16 +293,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
             if (tempGenerators[targetId]) {
               tempGenerators[targetId] = {
                 ...tempGenerators[targetId],
-                level: tempGenerators[targetId].level.plus(production),
+                quantity: tempGenerators[targetId].quantity.plus(production),
               }
             }
           }
         }
       })
 
-      const finalLevels: Record<string, Decimal> = {}
+      const finalQuantities: Record<string, Decimal> = {}
       Object.keys(tempGenerators).forEach(id => {
-        finalLevels[id] = new Decimal(tempGenerators[id].level)
+        finalQuantities[id] = new Decimal(tempGenerators[id].quantity)
       })
 
       let essenceGained = new Decimal(0)
@@ -331,16 +335,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
         essenceGained = essence.minus(essenceStart)
       }
 
-      const hasLevelChanges = Object.keys(initialLevels).some(
-        (id) => !initialLevels[id].eq(finalLevels[id])
+      const hasQuantityChanges = Object.keys(initialQuantities).some(
+        (id) => !initialQuantities[id].eq(finalQuantities[id])
       )
-      if (resourcesGained.eq(0) && !hasLevelChanges && essenceGained.eq(0)) return null
+      if (resourcesGained.eq(0) && !hasQuantityChanges && essenceGained.eq(0)) return null
 
       return {
         resourcesGained,
         essenceGained,
-        initialLevels,
-        finalLevels,
+        initialQuantities,
+        finalQuantities,
         timeOffline: offlineTime
       }
     } catch (e) {
@@ -357,23 +361,29 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
   const frameCountRef = useRef(0)
   const lastFpsUpdateRef = useRef(0)
   
-  // Direct DOM refs for progress bars (Zero Latency)
-  const barRefs = useRef<Record<string, HTMLDivElement>>({})
-  const registerBar = (id: string, el: HTMLDivElement | null) => {
-    if (el) {
-      barRefs.current[id] = el
-      el.style.transform = `scaleX(0)`
-    } else {
-      delete barRefs.current[id]
-    }
-  }
-
   // Volatile progress tracking initialized from saved state
   const progressRef = useRef<Record<string, number>>(
     Object.fromEntries(
       Object.entries(state.generators).map(([id, g]) => [id, g.progress])
     )
   )
+
+  // Direct DOM refs for progress bars (Zero Latency)
+  const barRefs = useRef<Record<string, HTMLDivElement>>({})
+  const registerBar = (id: string, el: HTMLDivElement | null) => {
+    if (el) {
+      barRefs.current[id] = el
+      const gen = stateRef.current.generators[id]
+      const p = progressRef.current[id] ?? 0
+      if (gen) {
+        applyProductionBarVisual(el, getEffectiveDuration(gen), p)
+      } else {
+        el.style.transform = "scaleX(0)"
+      }
+    } else {
+      delete barRefs.current[id]
+    }
+  }
 
   useEffect(() => {
     const handleSave = () => {
@@ -416,18 +426,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
     const commitTickProgress = (
       cycleCompleted: boolean,
       resourcesAdded: Decimal,
-      levelsAdded: Record<string, Decimal>,
+      quantitiesAdded: Record<string, Decimal>,
       essenceGained: Decimal
     ) => {
       if (!cycleCompleted && !essenceGained.gt(0)) return
       setState((prev) => {
         const nextGenerators = { ...prev.generators }
-        Object.entries(levelsAdded).forEach(([targetId, amount]) => {
-          if (nextGenerators[targetId]) {
-            nextGenerators[targetId] = {
-              ...nextGenerators[targetId],
-              level: nextGenerators[targetId].level.plus(amount),
-            }
+        Object.entries(quantitiesAdded).forEach(([targetId, amount]) => {
+          const tg = nextGenerators[targetId]
+          if (!tg) return
+          nextGenerators[targetId] = {
+            ...tg,
+            quantity: tg.quantity.plus(amount),
           }
         })
         return {
@@ -448,7 +458,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
       const dt = Math.min(deltaMs, MAX_DELTA_MS)
       let cycleCompleted = false
       let resourcesAdded = new Decimal(0)
-      const levelsAdded: Record<string, Decimal> = {}
+      const quantitiesAdded: Record<string, Decimal> = {}
       const gens = stateRef.current.generators
       let essenceGained = new Decimal(0)
       if (isEssencePassiveUnlocked(gens)) {
@@ -467,8 +477,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
       const generators = gens
       for (const id in generators) {
         const gen = generators[id]
-        if (gen.level.gt(0)) {
+        if (gen.quantity.gt(0)) {
           const duration = getEffectiveDuration(gen)
+          if (duration <= 0) continue
+
           const prev = progressRef.current[id] || 0
           const totalMs = prev * duration + dt
           const cycles = Math.floor(totalMs / duration)
@@ -483,8 +495,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
               resourcesAdded = resourcesAdded.plus(totalProd)
             } else {
               const targetId = `generator${genNum - 1}`
-              const prevAdd = levelsAdded[targetId] ?? new Decimal(0)
-              levelsAdded[targetId] = prevAdd.plus(totalProd)
+              const prevAdd = quantitiesAdded[targetId] ?? new Decimal(0)
+              quantitiesAdded[targetId] = prevAdd.plus(totalProd)
             }
           }
 
@@ -493,9 +505,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
             applyProductionBarVisual(bar, duration, progressRef.current[id])
           }
         }
+        /* Quantidade 0: não avança ciclo nem altera progressRef — barra fica congelada no último %. */
       }
 
-      commitTickProgress(cycleCompleted, resourcesAdded, levelsAdded, essenceGained)
+      commitTickProgress(cycleCompleted, resourcesAdded, quantitiesAdded, essenceGained)
     }
 
     const gameLoop = (currentTime: number) => {
@@ -543,9 +556,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
       if (document.hidden) {
         startBackgroundLoop()
       } else {
-        const now = performance.now()
-        const dt = now - lastTime
-        lastTime = now
+        const t0 = performance.now()
+        const dt = t0 - lastTime
+        lastTime = t0
         applyTickDelta(Math.min(dt, MAX_DELTA_MS))
         startVisibleLoop()
       }
@@ -602,7 +615,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
       const claimed = gen.claimedMilestoneExponents ?? []
       const genIndex = parseInt(id.replace("generator", ""), 10) || 1
       const { nextClaimed, coinsGained } = claimEligibleMilestones(
-        gen.level,
+        gen.quantity,
         claimed,
         genIndex
       )
@@ -628,7 +641,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({
         const genIndex = parseInt(id.replace("generator", ""), 10) || 1
         const claimed = gen.claimedMilestoneExponents ?? []
         const { nextClaimed, coinsGained } = claimEligibleMilestones(
-          gen.level,
+          gen.quantity,
           claimed,
           genIndex
         )

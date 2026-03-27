@@ -33,7 +33,7 @@ import Decimal from "break_eternity.js"
 
 function nextProductionAfterUpgrade(gen: Generator): Decimal {
   const r = (gen.productionUpgradeRank ?? 0) + 1
-  return gen.baseProduction.times(gen.level).times(new Decimal(2).pow(r))
+  return gen.baseProduction.times(gen.quantity).times(new Decimal(2).pow(r))
 }
 
 function nextDurationAfterUpgradeMs(gen: Generator): number | null {
@@ -230,7 +230,7 @@ export const UpgradesPage: React.FC = () => {
         const critMultRank = gen.critMultiplierRank ?? 0
         const critChanceCost = getCritChanceUpgradeCost(critChanceRank)
         const critMultCost = getCritMultiplierUpgradeCost(critMultRank)
-        const canProd = gen.level.gt(0)
+        const canProd = gen.quantity.gt(0)
         const currentProd = canProd
           ? formatNumber(getEffectiveProductionPerCycle(gen))
           : "0"
@@ -267,7 +267,7 @@ export const UpgradesPage: React.FC = () => {
                 nextLabel={nextProd}
                 cost={prodCost}
                 canBuy={canProd}
-                disabledReason="Precisa de nível ≥ 1 neste gerador."
+                disabledReason="Precisa de pelo menos 1 unidade deste gerador."
                 milestoneCurrency={state.milestoneCurrency}
                 onBuy={() => buyMilestoneUpgrade(gen.id, "production")}
               />
@@ -293,7 +293,7 @@ export const UpgradesPage: React.FC = () => {
                 canBuy={canCritChance}
                 disabledReason={
                   !canProd
-                    ? "Precisa de nível ≥ 1 neste gerador."
+                    ? "Precisa de pelo menos 1 unidade deste gerador."
                     : "Chance de crítico já no máximo."
                 }
                 milestoneCurrency={state.milestoneCurrency}
@@ -307,7 +307,7 @@ export const UpgradesPage: React.FC = () => {
                 nextLabel={canProd ? `×${nextCritMult}` : "—"}
                 cost={critMultCost}
                 canBuy={canProd}
-                disabledReason="Precisa de nível ≥ 1 neste gerador."
+                disabledReason="Precisa de pelo menos 1 unidade deste gerador."
                 milestoneCurrency={state.milestoneCurrency}
                 onBuy={() => buyMilestoneUpgrade(gen.id, "critMultiplier")}
               />
@@ -319,7 +319,7 @@ export const UpgradesPage: React.FC = () => {
 
         <TabsContent value="essence" className="mt-0 space-y-4 overflow-visible">
           <p className="text-[12px] leading-snug text-muted-foreground">
-            A essência passiva só corre com pelo menos um gerador em nível ≥ 1. O ciclo é de 1 segundo; os valores abaixo são por segundo.
+            A essência passiva só corre com pelo menos um gerador com quantidade ≥ 1. O ciclo é de 1 segundo; os valores abaixo são por segundo.
           </p>
           <div className="grid gap-3 lg:grid-cols-2">
             <UpgradeRow
@@ -330,7 +330,7 @@ export const UpgradesPage: React.FC = () => {
               nextLabel={`${formatNumber(essenceNextFlat)}/s`}
               cost={flatCost}
               canBuy={essenceUnlocked}
-              disabledReason="Precisa de pelo menos um gerador com nível ≥ 1."
+              disabledReason="Precisa de pelo menos um gerador com quantidade ≥ 1."
               milestoneCurrency={state.milestoneCurrency}
               onBuy={() => buyEssencePassiveUpgrade("flat")}
             />
@@ -342,7 +342,7 @@ export const UpgradesPage: React.FC = () => {
               nextLabel={`${formatNumber(essenceNextMult)}/s`}
               cost={multCost}
               canBuy={essenceUnlocked}
-              disabledReason="Precisa de pelo menos um gerador com nível ≥ 1."
+              disabledReason="Precisa de pelo menos um gerador com quantidade ≥ 1."
               milestoneCurrency={state.milestoneCurrency}
               onBuy={() => buyEssencePassiveUpgrade("multiplier")}
             />
